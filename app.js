@@ -11,6 +11,7 @@
   const DEFAULT_SCALE = 1;
   const AUTH_KEY = "tv-archive-unlocked";
   const DATA_KEY = "tv-archive-data-v3";
+  const SIDEBAR_KEY = "tv-archive-sidebar-collapsed";
   const PASSWORD = "0000";
   const MOODS = ["😊", "😐", "😵", "🔥", "✨", "😢"];
   const MOOD_VAL = { "😢": 1, "😵": 2, "😐": 3, "😊": 4, "✨": 5, "🔥": 5 };
@@ -38,6 +39,19 @@
   let drag = null;
   let pan = null;
   let skipClick = false;
+  let sideMode = "category";
+  let sideQuery = "";
+  let expanded = { "cat:__all": true };
+  let focusedId = null;
+  let railSection = "archive";
+  let sidebarCollapsed = false;
+  const STATUS_GROUPS = [
+    { key: "onair", label: "ON AIR", dot: "green", match: function (vs) { return vs.key === "onair"; } },
+    { key: "on", label: "ON", dot: "green", match: function (vs) { return vs.key === "on"; } },
+    { key: "pause", label: "PAUSE", dot: "red", match: function (vs) { return vs.key === "static" || vs.key === "night"; } },
+    { key: "offline", label: "OFFLINE", dot: "gray", match: function (vs) { return vs.key === "offline" || vs.key === "nosignal"; } },
+    { key: "ended", label: "방송 종료", dot: "", match: function (vs) { return vs.key === "ended"; } },
+  ];
 
   function uid(prefix) {
     return prefix + "-" + Math.random().toString(36).slice(2, 9);
@@ -257,7 +271,7 @@
     const w = vp ? vp.clientWidth : 0;
     const h = vp ? vp.clientHeight : 0;
     if (!state || !projects().length) return { x: w / 2, y: h / 2 };
-    return { x: w / 2, y: Math.min(270, h * 0.48) };
+    return { x: w / 2, y: Math.min(148, Math.max(120, h * 0.26)) };
   }
 
   function applyCamera() {
@@ -471,20 +485,185 @@
     renderMinimap();
   }
 
+  function setRail(name) {
+    railSection = name;
+    $$(".rail-nav [data-rail]").forEach((b) => {
+      b.classList.toggle("is-on", b.getAttribute("data-rail") === name);
+    });
+  }
+
+  function applySidebarCollapsed(collapsed) {
+    sidebarCollapsed = !!collapsed;
+    const app = $("#app");
+    if (app) app.classList.toggle("sidebar-collapsed", sidebarCollapsed);
+    try { localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "1" : "0"); } catch (err) {}
+    applyCamera();
+  }
+
+  function syncRail() {
+    if (!$("#trash-view").hidden) setRail("trash");
+    else if (!$("#recap-view").hidden) setRail("recap");
+    else setRail(railSection === "home" ? "home" : "archive");
+  }
+
+  function folderIco() {
+    return '<svg class="tree-folder-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7h6l2 2h10v10H3V7z"/></svg>';
+  }
+
+  function sortByRecent(items) {
+    return items.slice().sort(function (a, b) {
+      const da = lastDate(a), db = lastDate(b);
+      if (da < db) return 1;
+      if (da > db) return -1;
+      return 0;
+    });
+  }
+
+  function projectMatchesQuery(p, q) {
+    if (!q) return true;
+    if ((p.name || "").toLowerCase().indexOf(q) !== -1) return true;
+    if ((p.category || "").toLowerCase().indexOf(q) !== -1) return true;
+    return (p.channels || []).some(function (c) {
+      return (c.name || "").toLowerCase().indexOf(q) !== -1;
+    });
+  }
+
+  function renderProjectRow(p) {
+    const q = sideQuery.trim().toLowerCase();
+    if (q && !projectMatchesQuery(p, q)) return "";
+    const vs = visualState(p);
+    const expKey = "proj:" + p.id;
+    const open = !!expanded[expKey];
+    const on = (focusedId === p.id || currentId === p.id) ? " is-on" : "";
+    const channels = p.channels || [];
+    const chev = channels.length
+      ? '<span class="tree-chevron' + (open ? " is-open" : "") + '" data-toggle="' + esc(expKey) + '"></span>'
+      : '<span class="tree-pad"></span>';
+    let html = '<div class="tree-block">' +
+      '<button type="button" class="tree-row project' + on + '" data-pid="' + esc(p.id) + '">' +
+      chev +
+      '<i class="tree-dot' + (vs.dot ? " " + vs.dot : "") + '"></i>' +
+      '<span class="tree-name">' + esc(p.name) + "</span></button>";
+    if (open && channels.length) {
+      html += '<div class="tree-children">';
+      channels.forEach(function (ch) {
+        const chOn = (currentId === p.id && currentCh === ch.id) ? " is-on" : "";
+        html += '<button type="button" class="tree-row channel' + chOn + '" data-pid="' + esc(p.id) + '" data-ch="' + esc(ch.id) + '">' +
+          '<span class="tree-name">' + esc(ch.name) + "</span></button>";
+      });
+      html += "</div>";
+    }
+    html += "</div>";
+    return html;
+  }
+
+  function renderSideTree() {
+    const box = $("#side-tree");
+    if (!box || !state) return;
+    const q = sideQuery.trim().toLowerCase();
+    const list = projects();
+    let html = "";
+    if (sideMode === "status") {
+      STATUS_GROUPS.forEach(function (g) {
+        const items = sortByRecent(list.filter(function (p) { return g.match(visualState(p)); })
+          .filter(function (p) { return !q || projectMatchesQuery(p, q); }));
+        if (!items.length && q) return;
+        const key = "status:" + g.key;
+        if (q) expanded[key] = true;
+        const open = !!expanded[key];
+        html += '<div class="tree-block">';
+        html += '<button type="button" class="tree-row folder' + (open ? " is-open" : "") + '" data-toggle="' + key + '">' +
+          '<span class="tree-chevron' + (open ? " is-open" : "") + '"></span>' +
+          (g.dot ? '<i class="tree-dot ' + g.dot + '"></i>' : folderIco()) +
+          '<span class="tree-name">' + esc(g.label) + "</span>" +
+          '<span class="tree-count">' + items.length + "</span></button>";
+        if (open) html += '<div class="tree-children">' + items.map(renderProjectRow).join("") + "</div>";
+        html += "</div>";
+      });
+    } else {
+      const groups = [{ id: "__all", name: "전체" }].concat(
+        (state.categories || []).map(function (c) { return { id: c, name: c }; })
+      );
+      groups.forEach(function (g) {
+        const items = sortByRecent((g.id === "__all" ? list : list.filter(function (p) { return p.category === g.id; }))
+          .filter(function (p) { return !q || projectMatchesQuery(p, q); }));
+        if (q && !items.length && g.name.toLowerCase().indexOf(q) === -1) return;
+        const key = "cat:" + g.id;
+        if (q) expanded[key] = true;
+        const open = !!expanded[key];
+        const active = activeCat === g.id ? " is-active" : "";
+        html += '<div class="tree-block">';
+        html += '<button type="button" class="tree-row folder' + active + (open ? " is-open" : "") +
+          '" data-cat="' + esc(g.id) + '" data-toggle="' + key + '">' +
+          '<span class="tree-chevron' + (open ? " is-open" : "") + '"></span>' +
+          folderIco() +
+          '<span class="tree-name">' + esc(g.name) + "</span>" +
+          '<span class="tree-count">' + items.length + "</span>";
+        if (catsEditing && g.id !== "__all") {
+          html += '<span class="cat-x" data-del="' + esc(g.id) + '">×</span>';
+        }
+        html += "</button>";
+        if (open) html += '<div class="tree-children">' + items.map(renderProjectRow).join("") + "</div>";
+        html += "</div>";
+      });
+    }
+    box.innerHTML = html || '<p class="side-empty">맞는 항목이 없어.</p>';
+    $$("[data-side-mode]").forEach(function (b) {
+      b.classList.toggle("is-on", b.getAttribute("data-side-mode") === sideMode);
+    });
+    const lab = $("#ws-cat-label");
+    if (lab) lab.textContent = activeCat === "__all" ? "전체" : activeCat;
+  }
+
+  function renderWsCatMenu() {
+    const menu = $("#ws-cat-menu");
+    if (!menu) return;
+    const cats = ["__all"].concat(state.categories || []);
+    menu.innerHTML = cats.map(function (c) {
+      const label = c === "__all" ? "전체" : c;
+      return '<li><button type="button" data-cat="' + esc(c) + '"' + (c === activeCat ? ' class="is-on"' : "") + ">" +
+        esc(label) + "</button></li>";
+    }).join("");
+  }
+
   function renderCats() {
-    const box = $("#cat-tabs");
-    const cats = ["__all"].concat(state.categories);
-    box.innerHTML = '<div class="tab-pill">' + cats
-      .map((c) => {
-        const label = c === "__all" ? "전체" : c;
-        const on = c === activeCat ? " is-on" : "";
-        return (
-          '<button type="button" class="chip' + on + '" data-cat="' + esc(c) + '">' +
-          esc(label) +
-          '<span class="cat-x" data-del="' + esc(c) + '">×</span></button>'
-        );
-      })
-      .join("") + "</div>";
+    renderWsCatMenu();
+    renderSideTree();
+  }
+
+  function setActiveCat(cat) {
+    activeCat = cat || "__all";
+    expanded["cat:" + activeCat] = true;
+    renderCats();
+    renderWall();
+  }
+
+  function setSideMode(mode) {
+    sideMode = mode === "status" ? "status" : "category";
+    if (sideMode === "status") {
+      STATUS_GROUPS.forEach(function (g) { expanded["status:" + g.key] = true; });
+    } else {
+      expanded["cat:__all"] = true;
+    }
+    renderSideTree();
+  }
+
+  let projClickAt = 0;
+  let projClickId = "";
+
+  function focusProject(p) {
+    if (!p) return;
+    focusedId = p.id;
+    if (activeCat !== "__all" && p.category && p.category !== activeCat) {
+      activeCat = p.category;
+      renderWall();
+      renderCats();
+    } else {
+      $$(".tree-row.project").forEach(function (el) {
+        el.classList.toggle("is-on", el.getAttribute("data-pid") === p.id);
+      });
+    }
+    flyToProject(p);
   }
 
   function contentBounds() {
@@ -798,20 +977,33 @@
     $("#btn-next-file").disabled = files.length < 2;
     $("#btn-complete").textContent = p.completed ? "다시 켜기" : "방송 종료";
     $("#btn-toggle-private").textContent = p.private ? "공개로 전환" : "비공개 전환";
+    renderSideTree();
   }
 
-  function openZoom(id) {
+  function openZoom(id, channelId) {
     const p = getProject(id);
     if (!p) return;
     currentId = id;
+    focusedId = id;
+    expanded["proj:" + id] = true;
+    expanded["cat:__all"] = true;
+    if (p.category) expanded["cat:" + p.category] = true;
     const latest = lastUpdate(p);
     currentCh = latest ? latest.channelId : (p.channels[0] && p.channels[0].id);
     currentUp = latest ? latest.id : null;
     currentFile = 0;
+    if (channelId && (p.channels || []).some(function (c) { return c.id === channelId; })) {
+      currentCh = channelId;
+      const tapes = channelUpdates(p, currentCh);
+      currentUp = tapes[0] ? tapes[0].id : null;
+    }
     $("#zoom-view").hidden = false;
     $("#proj-menu").hidden = true;
     document.body.classList.remove("on-wall");
+    closeRecapKeep();
+    setRail("archive");
     renderZoom();
+    renderSideTree();
   }
 
   function closeZoom() {
@@ -821,6 +1013,7 @@
     currentId = null;
     document.body.classList.add("on-wall");
     renderWall();
+    renderSideTree();
   }
 
   /* —— recap —— */
@@ -957,15 +1150,23 @@
       "</ul></section>";
   }
 
+  function closeRecapKeep() {
+    $("#recap-view").hidden = true;
+  }
+
   function openRecap() {
+    if (currentId) closeZoom();
     $("#recap-view").hidden = false;
     document.body.classList.remove("on-wall");
+    setRail("recap");
     renderRecap();
   }
 
   function closeRecap() {
     $("#recap-view").hidden = true;
     document.body.classList.add("on-wall");
+    setRail("archive");
+    renderSideTree();
   }
 
   /* —— on air —— */
@@ -1106,7 +1307,9 @@
     const p = getProject(id);
     if (!p) return;
     document.body.classList.add("on-wall");
+    focusedId = id;
     renderWall();
+    renderSideTree();
     flyToProject(p);
   }
 
@@ -1393,26 +1596,6 @@
       applyCamera();
     });
 
-    $("#cat-tabs").addEventListener("click", (e) => {
-      const del = e.target.closest("[data-del]");
-      if (del && catsEditing && del.getAttribute("data-del") !== "__all") {
-        e.stopPropagation();
-        const name = del.getAttribute("data-del");
-        ensureEdit(() => {
-          state.categories = state.categories.filter((c) => c !== name);
-          if (activeCat === name) activeCat = "__all";
-          saveState();
-          renderCats();
-          renderWall();
-        });
-        return;
-      }
-      const chip = e.target.closest(".chip");
-      if (!chip) return;
-      activeCat = chip.getAttribute("data-cat");
-      renderCats();
-      renderWall();
-    });
     $("#btn-add-cat").addEventListener("click", () => {
       ensureEdit(() => {
         $("#cat-name").value = "";
@@ -1463,6 +1646,10 @@
       if (!e.target.closest(".search-box")) $("#search-results").hidden = true;
       if (!e.target.closest("#btn-menu") && !e.target.closest("#menu-pop")) $("#menu-pop").hidden = true;
       if (!e.target.closest("#btn-more-proj") && !e.target.closest("#proj-menu")) $("#proj-menu").hidden = true;
+      if (!e.target.closest(".ws-title")) {
+        const menu = $("#ws-cat-menu");
+        if (menu) menu.hidden = true;
+      }
     });
 
     $("#btn-menu").addEventListener("click", (e) => {
@@ -1495,6 +1682,7 @@
     $("#btn-trash").addEventListener("click", () => {
       renderTrash();
       $("#trash-view").hidden = false;
+      setRail("trash");
     });
     $("#trash-body").addEventListener("click", (e) => {
       const rest = e.target.closest("[data-restore]");
@@ -1675,7 +1863,7 @@
         if (which === "onair") closeOnAir();
         if (which === "pass") closePass();
         if (which === "shelf") $("#shelf-view").hidden = true;
-        if (which === "trash") $("#trash-view").hidden = true;
+        if (which === "trash") { $("#trash-view").hidden = true; syncRail(); }
         if (which === "cat") $("#cat-view").hidden = true;
       });
     });
@@ -1709,11 +1897,147 @@
       if (!$("#pass-view").hidden) return closePass();
       if (!$("#onair-view").hidden) return closeOnAir();
       if (!$("#shelf-view").hidden) return ($("#shelf-view").hidden = true);
-      if (!$("#trash-view").hidden) return ($("#trash-view").hidden = true);
+      if (!$("#trash-view").hidden) { $("#trash-view").hidden = true; syncRail(); return; }
       if (!$("#cat-view").hidden) return ($("#cat-view").hidden = true);
       if (!$("#recap-view").hidden) return closeRecap();
       if (!$("#zoom-view").hidden) return closeZoom();
     });
+
+    function bindSidebar() {
+      $$(".rail-nav [data-rail]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          const name = btn.getAttribute("data-rail");
+          if (name === "home") {
+            previewEmpty = false;
+            closeRecap();
+            if (currentId) closeZoom();
+            $("#trash-view").hidden = true;
+            setActiveCat("__all");
+            centerOnLatest(true);
+            setRail("home");
+          } else if (name === "archive") {
+            previewEmpty = false;
+            closeRecap();
+            $("#trash-view").hidden = true;
+            if (currentId) { /* stay zoomed */ }
+            else document.body.classList.add("on-wall");
+            applySidebarCollapsed(false);
+            setRail("archive");
+            renderSideTree();
+          } else if (name === "recap") {
+            $("#trash-view").hidden = true;
+            openRecap();
+          } else if (name === "trash") {
+            renderTrash();
+            $("#trash-view").hidden = false;
+            setRail("trash");
+          }
+        });
+      });
+      const logo = $("#btn-rail-logo");
+      if (logo) logo.addEventListener("click", function () {
+        previewEmpty = false;
+        closeRecap();
+        if (currentId) closeZoom();
+        $("#trash-view").hidden = true;
+        setActiveCat("__all");
+        centerOnLatest(true);
+        setRail("home");
+      });
+      $("#btn-side-new").addEventListener("click", function () { ensureEdit(createProject); });
+      $("#btn-side-collapse").addEventListener("click", function () { applySidebarCollapsed(true); });
+      $("#btn-side-expand").addEventListener("click", function () { applySidebarCollapsed(false); });
+      $("#side-panel").addEventListener("transitionend", function (e) {
+        if (e.propertyName === "width") applyCamera();
+      });
+      $$("[data-side-mode]").forEach(function (b) {
+        b.addEventListener("click", function () { setSideMode(b.getAttribute("data-side-mode")); });
+      });
+      $("#side-search").addEventListener("input", function () {
+        sideQuery = $("#side-search").value;
+        renderSideTree();
+      });
+      $("#btn-ws-cat").addEventListener("click", function (e) {
+        e.stopPropagation();
+        const menu = $("#ws-cat-menu");
+        menu.hidden = !menu.hidden;
+        if (!menu.hidden) renderWsCatMenu();
+      });
+      $("#ws-cat-menu").addEventListener("click", function (e) {
+        const btn = e.target.closest("[data-cat]");
+        if (!btn) return;
+        setActiveCat(btn.getAttribute("data-cat"));
+        $("#ws-cat-menu").hidden = true;
+      });
+      $("#side-tree").addEventListener("click", function (e) {
+        const del = e.target.closest("[data-del]");
+        if (del && catsEditing && del.getAttribute("data-del") !== "__all") {
+          e.stopPropagation();
+          const name = del.getAttribute("data-del");
+          ensureEdit(function () {
+            state.categories = state.categories.filter(function (c) { return c !== name; });
+            if (activeCat === name) activeCat = "__all";
+            saveState();
+            renderCats();
+            renderWall();
+          });
+          return;
+        }
+        const chev = e.target.closest("[data-toggle]");
+        if (chev && (e.target === chev || e.target.closest(".tree-chevron"))) {
+          e.preventDefault();
+          e.stopPropagation();
+          const key = chev.getAttribute("data-toggle");
+          expanded[key] = !expanded[key];
+          renderSideTree();
+          return;
+        }
+        const ch = e.target.closest(".tree-row.channel[data-ch]");
+        if (ch) {
+          const p = getProject(ch.getAttribute("data-pid"));
+          if (p) openZoom(p.id, ch.getAttribute("data-ch"));
+          return;
+        }
+        const proj = e.target.closest(".tree-row.project[data-pid]");
+        if (proj) {
+          const id = proj.getAttribute("data-pid");
+          const p = getProject(id);
+          if (!p) return;
+          const now = Date.now();
+          if (projClickId === id && now - projClickAt < 450) {
+            projClickId = "";
+            openZoom(p.id);
+            return;
+          }
+          projClickId = id;
+          projClickAt = now;
+          closeRecap();
+          if (currentId) closeZoom();
+          document.body.classList.add("on-wall");
+          focusProject(p);
+          return;
+        }
+        const folder = e.target.closest(".tree-row.folder");
+        if (folder) {
+          const cat = folder.getAttribute("data-cat");
+          const key = folder.getAttribute("data-toggle");
+          if (cat) {
+            expanded[key] = true;
+            setActiveCat(cat);
+          } else if (key) {
+            expanded[key] = !expanded[key];
+            renderSideTree();
+          }
+        }
+      });
+      $("#side-tree").addEventListener("dblclick", function (e) {
+        const proj = e.target.closest(".tree-row.project[data-pid]");
+        if (!proj) return;
+        const p = getProject(proj.getAttribute("data-pid"));
+        if (p) openZoom(p.id);
+      });
+    }
+    bindSidebar();
 
     window.addEventListener("resize", applyCamera);
   }
@@ -1760,6 +2084,7 @@
       closeRecap();
       if (currentId) closeZoom();
       renderWall();
+      renderCats();
       centerOnLatest(false);
     },
     reset: function () {
@@ -1771,14 +2096,18 @@
       renderWall();
       centerOnLatest(false);
     },
+    setSideMode: setSideMode,
+    collapseSidebar: applySidebarCollapsed,
   };
 
   function init() {
     unlocked = localStorage.getItem(AUTH_KEY) === "1";
+    try { sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "1"; } catch (err) {}
     loadState();
     purgeTrash();
     pickRerun();
     document.body.classList.add("on-wall");
+    if (sidebarCollapsed) $("#app").classList.add("sidebar-collapsed");
     bindEvents();
     renderCats();
     renderWall();
