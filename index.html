@@ -3,162 +3,223 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>프로젝트 아카이브</title>
+  <title>재민의 방송국</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5' fill='%23e23b3b'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="app">
-    <header class="topbar">
-      <div class="brand">
-        <span class="brand-mark">◈</span>
-        <span class="brand-name">아카이브</span>
+  <div id="app">
+    <header class="hud-top">
+      <div class="brand" title="재민의 방송국">
+        <span class="brand-dot"></span>
+        <span class="brand-name">방송국</span>
       </div>
-      <div class="search-wrap">
-        <svg class="search-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-        <input id="search" type="search" placeholder="프로젝트 · 파트 · 업데이트 검색" autocomplete="off" />
+      <div class="search-box">
+        <svg class="search-ico" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="search" type="search" placeholder="프로젝트, 업데이트 검색" autocomplete="off" />
+        <ul id="search-results" class="search-results" hidden></ul>
+      </div>
+      <div class="hud-actions">
+        <button type="button" id="btn-trash" class="hud-btn" title="창고">창고</button>
+        <button type="button" id="btn-menu" class="hud-btn" title="메뉴">···</button>
       </div>
     </header>
 
+    <div id="menu-pop" class="menu-pop" hidden>
+      <button type="button" id="btn-reset">샘플 데이터로 되돌리기</button>
+      <button type="button" id="btn-empty-preview">빈 방 미리보기</button>
+      <p class="menu-note">편집은 암호 0000 · 이 기기에 기억됨</p>
+    </div>
+
     <div class="cats-row">
-      <div id="cat-tabs" class="cat-tabs" role="tablist"></div>
-      <button id="btn-add-cat" class="btn-icon" type="button" title="카테고리 추가">+</button>
-      <button id="btn-edit-cats" class="btn-text" type="button">편집</button>
+      <div id="cat-tabs" class="cat-tabs"></div>
+      <button type="button" id="btn-add-cat" class="chip-icon" title="카테고리 추가">+</button>
+      <button type="button" id="btn-edit-cats" class="chip-text">편집</button>
     </div>
 
-    <div class="workspace">
-      <section class="grid-pane">
-        <div id="project-grid" class="project-grid"></div>
-      </section>
-
-      <aside id="detail-pane" class="detail-pane">
-        <div id="detail-empty" class="detail-empty">
-          <div class="empty-ico">⬚</div>
-          <p>프로젝트를 선택하세요</p>
-          <span>카드를 클릭하면 파트와 업데이트 타임라인이 여기에 열려요.</span>
-        </div>
-        <div id="detail-body" class="detail-body hidden"></div>
-      </aside>
+    <div id="viewport" class="viewport">
+      <div id="wall" class="wall"></div>
     </div>
+
+    <div class="hud-br">
+      <div class="zoom-btns">
+        <button type="button" id="btn-zoom-in" title="확대">+</button>
+        <button type="button" id="btn-zoom-out" title="축소">−</button>
+        <button type="button" id="btn-home" title="가장 최근 TV로">⌂</button>
+      </div>
+      <div id="minimap" class="minimap" title="미니맵"></div>
+    </div>
+
+    <div id="tooltip" class="tooltip" hidden></div>
   </div>
 
-  <!-- Modal: add update -->
-  <div id="modal-update" class="modal" hidden>
-    <div class="modal-backdrop" data-close></div>
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="mu-title">
-      <header class="modal-head">
-        <h2 id="mu-title">업데이트 추가</h2>
-        <button class="btn-icon" type="button" data-close aria-label="닫기">×</button>
+  <!-- Zoomed TV -->
+  <section id="zoom-view" class="overlay zoom-view" hidden>
+    <div class="zoom-toolbar">
+      <button type="button" id="btn-back-wall" class="hud-btn">← 벽으로</button>
+      <div class="zoom-toolbar-r">
+        <button type="button" id="btn-onair" class="btn-onair">● ON AIR</button>
+        <button type="button" id="btn-complete" class="hud-btn">방송 종료</button>
+        <button type="button" id="btn-more-proj" class="hud-btn">···</button>
+      </div>
+    </div>
+    <div id="proj-menu" class="menu-pop proj-menu" hidden>
+      <button type="button" id="btn-rename">이름 바꾸기</button>
+      <button type="button" id="btn-toggle-private">비공개 전환</button>
+      <button type="button" id="btn-delete-proj" class="danger">창고로 보내기</button>
+    </div>
+    <div class="zoom-stage">
+      <div id="big-tv" class="tv tv-big"></div>
+      <button type="button" id="btn-prev-file" class="nav-arrow left" aria-label="이전 파일">‹</button>
+      <button type="button" id="btn-next-file" class="nav-arrow right" aria-label="다음 파일">›</button>
+    </div>
+    <div id="zoom-meta" class="zoom-meta"></div>
+    <div class="inventory">
+      <div class="inv-row">
+        <div id="channel-tabs" class="channel-tabs"></div>
+        <button type="button" id="btn-shelf" class="chip-text">전체 보기</button>
+      </div>
+      <div id="vhs-row" class="vhs-row"></div>
+      <div id="file-slots" class="file-slots"></div>
+    </div>
+  </section>
+
+  <!-- ON AIR form -->
+  <section id="onair-view" class="overlay modal-overlay" hidden>
+    <div class="modal-backdrop" data-close="onair"></div>
+    <form id="onair-form" class="panel onair-panel" autocomplete="off">
+      <header class="panel-head">
+        <h2>송출</h2>
+        <button type="button" class="btn-icon" data-close="onair" aria-label="닫기">×</button>
       </header>
-      <form id="form-update" class="modal-form">
+      <div class="onair-grid">
         <label>
-          <span>파트</span>
-          <select id="fu-part" required></select>
+          <span>채널</span>
+          <select id="oa-channel"></select>
         </label>
-        <label>
-          <span>제목</span>
-          <input id="fu-title" type="text" placeholder="짧은 제목" required maxlength="80" />
+        <label class="check-label">
+          <input type="checkbox" id="oa-private" />
+          <span>이 업데이트 비공개</span>
         </label>
-        <label>
-          <span>상세 메모</span>
-          <textarea id="fu-detail" rows="4" placeholder="진행 내용, 메모…"></textarea>
-        </label>
-        <label>
-          <span>미디어 타입</span>
-          <select id="fu-media-type">
-            <option value="image">이미지</option>
-            <option value="video">영상</option>
-            <option value="model3d">3D</option>
-            <option value="none">없음</option>
-          </select>
-        </label>
-        <div class="dropzone" id="fu-drop">
-          <p>파일을 끌어다 놓거나 클릭해서 선택</p>
-          <span class="muted">이미지 · 영상 · 3D 모델 (목업 — 실제 업로드 없음)</span>
-          <input type="file" id="fu-file" hidden />
-        </div>
-        <div class="modal-actions">
-          <button type="button" class="btn-ghost" data-close>취소</button>
-          <button type="submit" class="btn-primary">추가</button>
-        </div>
-      </form>
-    </div>
-  </div>
+      </div>
+      <label>
+        <span>제목</span>
+        <input id="oa-title" type="text" maxlength="80" placeholder="없어도 돼 · 파일만 있어도 송출돼" />
+      </label>
+      <label>
+        <span>설명</span>
+        <textarea id="oa-desc" rows="3" placeholder="진행한 내용, 짧은 메모"></textarea>
+      </label>
+      <label>
+        <span>다음 할 일</span>
+        <input id="oa-todo" type="text" maxlength="120" placeholder="다음에 이어서 할 일" />
+      </label>
+      <div class="mood-field">
+        <span>오늘의 기분</span>
+        <div id="oa-moods" class="mood-picker"></div>
+      </div>
+      <div id="oa-drop" class="dropzone">
+        <p>파일을 끌어다 놓거나 클릭해서 선택</p>
+        <span>이미지 · 영상 · 3D · 파일만 넣어도 송출할 수 있어</span>
+        <input id="oa-files" type="file" accept="image/*,video/*,.glb,.gltf,.obj" multiple hidden />
+        <div id="oa-previews" class="oa-previews"></div>
+      </div>
+      <div class="panel-actions">
+        <button type="button" class="btn-ghost" data-close="onair">취소</button>
+        <button type="submit" class="btn-send">송출!</button>
+      </div>
+    </form>
+  </section>
 
-  <!-- Modal: new project -->
-  <div id="modal-project" class="modal" hidden>
-    <div class="modal-backdrop" data-close></div>
-    <div class="modal-card" role="dialog" aria-modal="true">
-      <header class="modal-head">
-        <h2>새 프로젝트</h2>
-        <button class="btn-icon" type="button" data-close aria-label="닫기">×</button>
+  <!-- RECAP -->
+  <section id="recap-view" class="overlay recap-view" hidden>
+    <div class="recap-bar">
+      <button type="button" id="btn-recap-back" class="hud-btn">← 벽으로</button>
+      <div id="recap-tabs" class="recap-tabs">
+        <button type="button" data-period="week" class="is-on">주간</button>
+        <button type="button" data-period="month">월간</button>
+      </div>
+    </div>
+    <article id="recap-page" class="recap-page"></article>
+  </section>
+
+  <!-- Tape shelf -->
+  <section id="shelf-view" class="overlay modal-overlay" hidden>
+    <div class="modal-backdrop" data-close="shelf"></div>
+    <div class="panel shelf-panel">
+      <header class="panel-head">
+        <h2>테이프 선반</h2>
+        <button type="button" class="btn-icon" data-close="shelf" aria-label="닫기">×</button>
       </header>
-      <form id="form-project" class="modal-form">
-        <label>
-          <span>이름</span>
-          <input id="fp-name" type="text" required maxlength="60" placeholder="프로젝트 이름" />
-        </label>
-        <label>
-          <span>카테고리</span>
-          <select id="fp-cat" required></select>
-        </label>
-        <label>
-          <span>상태</span>
-          <select id="fp-status">
-            <option value="진행 중">진행 중</option>
-            <option value="보류">보류</option>
-            <option value="완료">완료</option>
-          </select>
-        </label>
-        <div class="modal-actions">
-          <button type="button" class="btn-ghost" data-close>취소</button>
-          <button type="submit" class="btn-primary">만들기</button>
-        </div>
-      </form>
+      <div id="shelf-body" class="shelf-body"></div>
     </div>
-  </div>
+  </section>
 
-  <!-- Modal: add category -->
-  <div id="modal-cat" class="modal" hidden>
-    <div class="modal-backdrop" data-close></div>
-    <div class="modal-card modal-sm" role="dialog" aria-modal="true">
-      <header class="modal-head">
+  <!-- Trash -->
+  <section id="trash-view" class="overlay modal-overlay" hidden>
+    <div class="modal-backdrop" data-close="trash"></div>
+    <div class="panel trash-panel">
+      <header class="panel-head">
+        <h2>창고</h2>
+        <button type="button" class="btn-icon" data-close="trash" aria-label="닫기">×</button>
+      </header>
+      <p class="panel-lead">삭제한 프로젝트는 30일 동안 여기에 있어.</p>
+      <div id="trash-body" class="trash-body"></div>
+    </div>
+  </section>
+
+  <!-- Password -->
+  <section id="pass-view" class="overlay modal-overlay" hidden>
+    <div class="modal-backdrop" data-close="pass"></div>
+    <form id="pass-form" class="panel pass-panel" autocomplete="off">
+      <header class="panel-head">
+        <h2>편집 암호</h2>
+        <button type="button" class="btn-icon" data-close="pass" aria-label="닫기">×</button>
+      </header>
+      <p class="panel-lead">보는 건 누구나 되고, 편집할 때만 암호가 필요해.</p>
+      <label>
+        <span>암호</span>
+        <input type="text" name="username" value="editor" autocomplete="username" class="visually-hidden" tabindex="-1" aria-hidden="true" />
+      <input id="pass-input" type="password" inputmode="numeric" maxlength="16" placeholder="0000" autocomplete="current-password" />
+      </label>
+      <p id="pass-err" class="pass-err" hidden>암호가 달라...</p>
+      <div class="panel-actions">
+        <button type="button" class="btn-ghost" data-close="pass">취소</button>
+        <button type="submit" class="btn-send">확인</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Category prompt -->
+  <section id="cat-view" class="overlay modal-overlay" hidden>
+    <div class="modal-backdrop" data-close="cat"></div>
+    <form id="cat-form" class="panel pass-panel" autocomplete="off">
+      <header class="panel-head">
         <h2>카테고리 추가</h2>
-        <button class="btn-icon" type="button" data-close aria-label="닫기">×</button>
+        <button type="button" class="btn-icon" data-close="cat" aria-label="닫기">×</button>
       </header>
-      <form id="form-cat" class="modal-form">
-        <label>
-          <span>이름</span>
-          <input id="fc-name" type="text" required maxlength="24" placeholder="예: 게임, 브랜딩" />
-        </label>
-        <div class="modal-actions">
-          <button type="button" class="btn-ghost" data-close>취소</button>
-          <button type="submit" class="btn-primary">추가</button>
-        </div>
-      </form>
-    </div>
+      <label>
+        <span>이름</span>
+        <input id="cat-name" type="text" maxlength="20" placeholder="예: 게임, 브랜딩" required />
+      </label>
+      <div class="panel-actions">
+        <button type="button" class="btn-ghost" data-close="cat">취소</button>
+        <button type="submit" class="btn-send">추가</button>
+      </div>
+    </form>
+  </section>
+
+  <div id="broadcast-fx" class="broadcast-fx" hidden>
+    <div class="fx-static"></div>
+    <div class="fx-onair"><span></span> ON AIR</div>
   </div>
 
-  <!-- Modal: add part -->
-  <div id="modal-part" class="modal" hidden>
-    <div class="modal-backdrop" data-close></div>
-    <div class="modal-card modal-sm" role="dialog" aria-modal="true">
-      <header class="modal-head">
-        <h2>파트 추가</h2>
-        <button class="btn-icon" type="button" data-close aria-label="닫기">×</button>
-      </header>
-      <form id="form-part" class="modal-form">
-        <label>
-          <span>파트 이름</span>
-          <input id="fpart-name" type="text" required maxlength="30" placeholder="예: 일러스트, 배경, UI" />
-        </label>
-        <div class="modal-actions">
-          <button type="button" class="btn-ghost" data-close>취소</button>
-          <button type="submit" class="btn-primary">추가</button>
-        </div>
-      </form>
-    </div>
-  </div>
+  <svg width="0" height="0" aria-hidden="true">
+    <filter id="noise-filter">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="4" stitchTiles="stitch" />
+    </filter>
+  </svg>
 
   <script src="data.js"></script>
   <script src="app.js"></script>

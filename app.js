@@ -1,518 +1,1790 @@
-(() => {
-  const STORAGE_KEY = "project-archive-v1";
+/* TV Archive mockup */
+(function () {
+  "use strict";
 
-  const $ = (sel, el = document) => el.querySelector(sel);
-  const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
+  const CELL = 210;
+  const GAP = 18;
+  const GRID_MIN = -8;
+  const SCALE_MIN = 0.38;
+  const SCALE_MAX = 1.75;
+  const DEFAULT_SCALE = 0.7;
+  const AUTH_KEY = "tv-archive-unlocked";
+  const DATA_KEY = "tv-archive-data";
+  const PASSWORD = "0000";
+  const MOODS = ["😊", "😐", "😵", "🔥", "✨", "😢"];
+  const MOOD_VAL = { "😢": 1, "😵": 2, "😐": 3, "😊": 4, "✨": 5, "🔥": 5 };
 
-  let state = load();
-  let activeCat = "__all";
-  let selectedId = null;
-  let activePart = "__all";
-  let searchQ = "";
+  const $ = (s, r) => (r || document).querySelector(s);
+  const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+
+  const camera = { cx: 0, cy: 0, scale: DEFAULT_SCALE };
+  let state = null;
+  let unlocked = false;
+  let previewEmpty = false;
   let catsEditing = false;
-  let pendingFileName = "";
-
-  function load() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) return JSON.parse(raw);
-    } catch (_) {}
-    return structuredClone(window.ARCHIVE_SEED);
-  }
-  function save() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }
+  let activeCat = "__all";
+  let rerun = null;
+  let pendingEdit = null;
+  let currentId = null;
+  let currentCh = null;
+  let currentUp = null;
+  let currentFile = 0;
+  let recapPeriod = "week";
+  let oaFiles = [];
+  let oaMood = "😊";
+  let threeCtl = null;
+  let searchIndex = -1;
+  let drag = null;
+  let pan = null;
+  let skipClick = false;
 
   function uid(prefix) {
-    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    return prefix + "-" + Math.random().toString(36).slice(2, 9);
+  }
+  function today() {
+    // Mock "today" locked to the planning date so TV states stay stable.
+    return new Date(2026, 10, 7);
+  }
+  function parseDay(str) {
+    if (!str) return today();
+    const [y, m, d] = str.split("-").map(Number);
+    return new Date(y, (m || 1) - 1, d || 1);
+  }
+  function fmtDay(dt) {
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, "0");
+    const d = String(dt.getDate()).padStart(2, "0");
+    return y + "-" + m + "-" + d;
+  }
+  function daysBetween(str) {
+    return Math.round((today() - parseDay(str)) / 86400000);
+  }
+  function clone(v) {
+    return JSON.parse(JSON.stringify(v));
   }
 
-  function mediaLabel(t) {
-    if (t === "video") return "영상";
-    if (t === "model3d") return "3D";
-    return "이미지";
+  function sizeFor(n) {
+    if (n >= 20) return { w: 3, h: 3, key: "3x3" };
+    if (n >= 10) return { w: 2, h: 2, key: "2x2" };
+    if (n >= 5) return { w: 2, h: 1, key: "2x1" };
+    return { w: 1, h: 1, key: "1x1" };
   }
-  function statusClass(s) {
-    if (s === "보류") return "hold";
-    if (s === "완료") return "done";
-    return "ing";
+
+  function projects() {
+    return previewEmpty ? [] : state.projects;
   }
-  function fmtDate(d) {
-    if (!d) return "—";
-    const [y, m, day] = d.split("-");
-    return `${y}.${m}.${day}`;
+
+  function applySizes() {
+    projects().forEach((p) => {
+      const s = sizeFor((p.updates || []).length);
+      p.w = s.w;
+      p.h = s.h;
+      p.sizeKey = s.key;
+    });
   }
-  function escapeHtml(s) {
-    return String(s)
+
+  function sortedUpdates(p) {
+    return (p.updates || []).slice().sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  }
+
+  function lastUpdate(p) {
+    return sortedUpdates(p)[0] || null;
+  }
+
+  function lastDate(p) {
+    const u = lastUpdate(p);
+    return u ? u.date : "2000-01-01";
+  }
+
+  function latestMood(p) {
+    const u = sortedUpdates(p).find((x) => x.mood);
+    return u ? u.mood : "";
+  }
+
+  function coverOf(p, update) {
+    const u = update || lastUpdate(p);
+    if (!u || !u.files || !u.files.length) return "";
+    return u.files[0].src || "";
+  }
+
+  function visualState(p) {
+    if (p.private && !unlocked) {
+      return { key: "nosignal", badge: "NO SIGNAL", label: "비공개", days: daysBetween(lastDate(p)) };
+    }
+    if (p.completed) {
+      return { key: "ended", badge: "방송 종료", label: "방송 종료", days: daysBetween(lastDate(p)) };
+    }
+    const d = daysBetween(lastDate(p));
+    if (d <= 3) return { key: "onair", badge: "ON AIR", label: "방송 중", days: d, dot: true };
+    if (d <= 14) return { key: "on", badge: "ON", label: "켜져 있음", days: d };
+    if (d <= 30) return { key: "static", badge: "STATIC", label: "지지직", days: d };
+    if (d <= 90) return { key: "night", badge: "NIGHT", label: "혼자 켜진 밤", days: d };
+    return { key: "offline", badge: "OFFLINE", label: "꺼짐", days: d };
+  }
+
+  function daysLabel(d) {
+    if (d <= 0) return "오늘";
+    if (d === 1) return "어제";
+    return d + "일 전";
+  }
+
+  function cellToLocal(x, y) {
+    return { x: (x - GRID_MIN) * CELL, y: (y - GRID_MIN) * CELL };
+  }
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(DATA_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.projects)) {
+          state = parsed;
+          if (!state.recap) state.recap = { x: 2, y: 0 };
+          if (!state.categories) state.categories = clone(TV_SEED.categories);
+          if (!state.trash) state.trash = [];
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("seed fallback", err);
+    }
+    state = clone(window.TV_SEED);
+  }
+
+  function saveState() {
+    if (previewEmpty) return;
+    try {
+      localStorage.setItem(DATA_KEY, JSON.stringify(state));
+    } catch (err) {
+      console.warn("save failed", err);
+    }
+  }
+
+  function purgeTrash() {
+    state.trash = (state.trash || []).filter((p) => daysBetween(p.deletedAt) <= 30);
+  }
+
+  function pickRerun() {
+    const targets = [];
+    projects().forEach((p) => {
+      if (p.private && !unlocked) return;
+      (p.updates || []).forEach((u) => {
+        const d = daysBetween(u.date);
+        if ([30, 90, 365].some((n) => Math.abs(d - n) <= 6)) {
+          targets.push({ projectId: p.id, updateId: u.id });
+        }
+      });
+    });
+    rerun = targets.length ? targets[Math.floor(Math.random() * targets.length)] : null;
+  }
+
+  function occupiedSet(exceptId) {
+    const set = new Set();
+    applySizes();
+    projects().forEach((p) => {
+      if (p.id === exceptId) return;
+      for (let y = 0; y < p.h; y++) {
+        for (let x = 0; x < p.w; x++) set.add(p.x + x + "," + (p.y + y));
+      }
+    });
+    if (projects().length && !(exceptId === "__recap")) {
+      set.add(state.recap.x + "," + state.recap.y);
+    }
+    return set;
+  }
+
+  function findEmpty(w, h, exceptId) {
+    const occ = occupiedSet(exceptId);
+    let minX = 0, minY = 0, maxX = 5, maxY = 4;
+    projects().forEach((p) => {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x + p.w);
+      maxY = Math.max(maxY, p.y + p.h);
+    });
+    for (let y = minY; y <= maxY + 3; y++) {
+      for (let x = minX; x <= maxX + 3; x++) {
+        let ok = true;
+        for (let dy = 0; dy < h && ok; dy++) {
+          for (let dx = 0; dx < w && ok; dx++) {
+            if (occ.has(x + dx + "," + (y + dy))) ok = false;
+          }
+        }
+        if (ok) return { x: x, y: y };
+      }
+    }
+    return { x: maxX + 1, y: minY };
+  }
+
+  function rectsOverlap(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  function resolveCollisions(moved, dir, depth) {
+    if (depth > 14) return;
+    applySizes();
+    projects().forEach((o) => {
+      if (o === moved) return;
+      if (!rectsOverlap(moved, o)) return;
+      if (dir === "left") o.x = moved.x - o.w;
+      else if (dir === "up") o.y = moved.y - o.h;
+      else if (dir === "down") o.y = moved.y + moved.h;
+      else o.x = moved.x + moved.w;
+      resolveCollisions(o, dir, depth + 1);
+    });
+    if (projects().length) {
+      const rec = { x: state.recap.x, y: state.recap.y, w: 1, h: 1 };
+      if (moved.id !== "__recap" && rectsOverlap(moved, rec)) {
+        if (dir === "left") state.recap.x = moved.x - 1;
+        else if (dir === "up") state.recap.y = moved.y - 1;
+        else if (dir === "down") state.recap.y = moved.y + moved.h;
+        else state.recap.x = moved.x + moved.w;
+      }
+    }
+  }
+
+  function growProject(p) {
+    const beforeW = p.w || 1;
+    const beforeH = p.h || 1;
+    applySizes();
+    if (p.w !== beforeW || p.h !== beforeH) resolveCollisions(p, "right", 0);
+  }
+
+  /* —— camera —— */
+  function applyCamera() {
+    const vp = $("#viewport");
+    const wall = $("#wall");
+    if (!vp || !wall) return;
+    wall.style.transform =
+      "translate(" + vp.clientWidth / 2 + "px," + vp.clientHeight / 2 + "px) scale(" +
+      camera.scale + ") translate(" + (-camera.cx) + "px," + (-camera.cy) + "px)";
+    renderMinimap();
+  }
+
+  function scaleToKeepCluster(cx, cy) {
+    const vp = $("#viewport");
+    const b = contentBounds();
+    if (!vp || !b.w) return DEFAULT_SCALE;
+    const needW = 2 * Math.max(cx - b.x, b.x + b.w - cx);
+    const needH = 2 * Math.max(cy - b.y, b.y + b.h - cy);
+    const fit = Math.min(vp.clientWidth / Math.max(needW, 1), vp.clientHeight / Math.max(needH, 1));
+    return Math.min(DEFAULT_SCALE, Math.max(SCALE_MIN, fit * 0.9));
+  }
+
+  function centerOnLatest(animate) {
+    const list = projects().slice().sort((a, b) => (lastDate(a) < lastDate(b) ? 1 : -1));
+    const p = list[0];
+    if (p) {
+      applySizes();
+      const loc = cellToLocal(p.x + p.w / 2, p.y + p.h / 2);
+      const scale = scaleToKeepCluster(loc.x, loc.y);
+      if (animate) animateCamera(loc.x, loc.y, scale);
+      else {
+        camera.cx = loc.x;
+        camera.cy = loc.y;
+        camera.scale = scale;
+        applyCamera();
+      }
+    } else {
+      const loc = cellToLocal(0.5, 0.5);
+      camera.cx = loc.x;
+      camera.cy = loc.y;
+      camera.scale = 0.95;
+      applyCamera();
+    }
+  }
+
+  function flyToProject(p) {
+    applySizes();
+    const loc = cellToLocal(p.x + p.w / 2, p.y + p.h / 2);
+    animateCamera(loc.x, loc.y, camera.scale);
+    const el = $('#wall .tv[data-id="' + p.id + '"]');
+    if (el) {
+      el.classList.add("is-flash");
+      setTimeout(() => el.classList.remove("is-flash"), 900);
+    }
+  }
+
+  function animateCamera(tx, ty, ts) {
+    const sx = camera.cx, sy = camera.cy, ss = camera.scale;
+    const t0 = performance.now();
+    const dur = 520;
+    function step(now) {
+      const t = Math.min(1, (now - t0) / dur);
+      const e = 1 - Math.pow(1 - t, 3);
+      camera.cx = sx + (tx - sx) * e;
+      camera.cy = sy + (ty - sy) * e;
+      camera.scale = ss + (ts - ss) * e;
+      applyCamera();
+      if (t < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  function worldFromEvent(e) {
+    const r = $("#viewport").getBoundingClientRect();
+    return {
+      x: camera.cx + (e.clientX - r.left - r.width / 2) / camera.scale,
+      y: camera.cy + (e.clientY - r.top - r.height / 2) / camera.scale,
+    };
+  }
+
+  /* —— render wall —— */
+  function tvScreenHTML(opts) {
+    const badgeDot = opts.dot ? '<i class="dot"></i>' : "";
+    const name = opts.name ? '<p class="tv-name">' + esc(opts.name) + "</p>" : "";
+    const badge = opts.badge
+      ? '<div class="tv-badge">' + badgeDot + esc(opts.badge) + "</div>"
+      : "";
+    const rerunTag = opts.rerun ? '<div class="tv-rerun">재방송</div>' : "";
+    let body = "";
+    if (opts.kind === "nosignal") {
+      body = '<div class="tv-nosignal"><span>NO SIGNAL</span></div>';
+    } else if (opts.kind === "ended") {
+      body = '<div class="tv-bars"></div>';
+    } else if (opts.kind === "plus") {
+      body = '<div class="tv-plus-mark">+</div>';
+    } else if (opts.kind === "recap") {
+      body = '<div class="tv-recap-art"><div class="recap-word">RECAP</div></div>';
+    } else {
+      const img = opts.src
+        ? '<img class="tv-thumb" alt="" src="' + esc(opts.src) + '" />'
+        : "";
+      body = img;
+    }
+    const ambient = opts.src && opts.kind !== "nosignal" && opts.kind !== "ended" && opts.kind !== "offline"
+      ? '<div class="tv-ambient" style="background-image:url(\'' + esc(opts.src) + "')\"></div>"
+      : "";
+    const staticLayer = opts.kind === "static" ? '<div class="tv-static"></div>' : "";
+    return (
+      ambient +
+      '<div class="tv-screen">' +
+      body +
+      '<div class="tv-glow"></div>' +
+      '<div class="tv-scan"></div>' +
+      '<div class="tv-scrim"></div>' +
+      staticLayer +
+      rerunTag +
+      badge +
+      name +
+      "</div>"
+    );
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
   }
 
-  function projectStats(p) {
-    const parts = p.parts || [];
-    const ing = parts.filter((x) => x.status === "진행 중").length;
-    return { partCount: parts.length, ing };
-  }
+  function renderWall() {
+    const wall = $("#wall");
+    wall.innerHTML = "";
+    applySizes();
+    const list = projects();
+    const hideOthers = activeCat !== "__all";
 
-  function lastUpdated(p) {
-    return p.updated || p.started || "";
-  }
+    list.forEach((p) => {
+      const vs = visualState(p);
+      const loc = cellToLocal(p.x, p.y);
+      const el = document.createElement("div");
+      const isRerun = rerun && rerun.projectId === p.id;
+      let src = coverOf(p);
+      let kind = vs.key;
+      if (isRerun) {
+        const ru = (p.updates || []).find((u) => u.id === rerun.updateId);
+        if (ru && ru.files && ru.files[0]) src = ru.files[0].src;
+      }
+      if (vs.key === "nosignal") kind = "nosignal";
+      else if (vs.key === "ended") kind = "ended";
+      else if (vs.key === "offline") kind = "offline";
+      else if (vs.key === "static") kind = "static";
 
-  function filteredProjects() {
-    let list = state.projects.slice();
-    if (activeCat !== "__all") {
-      list = list.filter((p) => p.category === activeCat);
-    }
-    if (searchQ.trim()) {
-      const q = searchQ.trim().toLowerCase();
-      list = list.filter((p) => {
-        const hay = [
-          p.name,
-          p.category,
-          p.status,
-          ...(p.parts || []).map((x) => x.name),
-          ...(p.updates || []).flatMap((u) => [u.title, u.detail]),
-        ]
-          .join(" ")
-          .toLowerCase();
-        return hay.includes(q);
+      el.className = "tv size-" + p.sizeKey + " state-" + vs.key;
+      el.dataset.id = p.id;
+      el.style.left = loc.x + "px";
+      el.style.top = loc.y + "px";
+      el.style.width = p.w * CELL - GAP + "px";
+      el.style.height = p.h * CELL - GAP + "px";
+      if (hideOthers && p.category !== activeCat) el.classList.add("is-dim");
+      el.innerHTML = tvScreenHTML({
+        kind: kind,
+        src: src,
+        name: p.name,
+        badge: vs.badge,
+        dot: vs.dot,
+        rerun: isRerun,
       });
+      wall.appendChild(el);
+    });
+
+    if (list.length) {
+      const loc = cellToLocal(state.recap.x, state.recap.y);
+      const rec = document.createElement("div");
+      rec.className = "tv size-1x1 tv-special";
+      rec.dataset.special = "recap";
+      rec.style.left = loc.x + "px";
+      rec.style.top = loc.y + "px";
+      rec.style.width = CELL - GAP + "px";
+      rec.style.height = CELL - GAP + "px";
+      rec.innerHTML = tvScreenHTML({
+        kind: "recap",
+        name: "주간 특집",
+        badge: "특집",
+      });
+      wall.appendChild(rec);
     }
-    list.sort((a, b) => (lastUpdated(b) || "").localeCompare(lastUpdated(a) || ""));
-    return list;
+
+    const plusAt = findEmpty(1, 1);
+    const ploc = cellToLocal(plusAt.x, plusAt.y);
+    const plus = document.createElement("div");
+    plus.className = "tv size-1x1 state-offline tv-special";
+    plus.dataset.special = "plus";
+    plus.dataset.x = String(plusAt.x);
+    plus.dataset.y = String(plusAt.y);
+    plus.style.left = ploc.x + "px";
+    plus.style.top = ploc.y + "px";
+    plus.style.width = CELL - GAP + "px";
+    plus.style.height = CELL - GAP + "px";
+    plus.innerHTML = tvScreenHTML({ kind: "plus", badge: "OFFLINE", name: "" });
+    wall.appendChild(plus);
+
+    if (!list.length) {
+      const wrap = document.createElement("div");
+      wrap.className = "mascot-wrap";
+      wrap.style.left = ploc.x + CELL - 8 + "px";
+      wrap.style.top = ploc.y + 28 + "px";
+      wrap.innerHTML =
+        '<svg class="mascot-blob" viewBox="0 0 64 56" xmlns="http://www.w3.org/2000/svg">' +
+        '<ellipse cx="32" cy="30" rx="22" ry="18" fill="#3a3a40"/>' +
+        '<ellipse cx="32" cy="22" rx="16" ry="14" fill="#4a4a52"/>' +
+        '<circle cx="26" cy="22" r="3.2" fill="#efece4"/>' +
+        '<circle cx="38" cy="22" r="3.2" fill="#efece4"/>' +
+        '<circle cx="26.6" cy="22.4" r="1.3" fill="#222"/>' +
+        '<circle cx="38.6" cy="22.4" r="1.3" fill="#222"/>' +
+        '<path d="M28 30 q4 3 8 0" stroke="#c8c4bc" stroke-width="1.6" fill="none" stroke-linecap="round"/>' +
+        '<circle cx="46" cy="10" r="3.5" fill="#5a5a62"/>' +
+        '<rect x="45" y="2" width="2" height="8" rx="1" fill="#6a6a72"/>' +
+        "</svg>" +
+        '<div class="mascot-speech">첫 방송을 시작해볼까...?</div>';
+      wall.appendChild(wrap);
+    }
+
+    renderMinimap();
   }
 
+  function renderCats() {
+    const box = $("#cat-tabs");
+    const cats = ["__all"].concat(state.categories);
+    box.innerHTML = cats
+      .map((c) => {
+        const label = c === "__all" ? "전체" : c;
+        const on = c === activeCat ? " is-on" : "";
+        return (
+          '<button type="button" class="chip' + on + '" data-cat="' + esc(c) + '">' +
+          esc(label) +
+          '<span class="cat-x" data-del="' + esc(c) + '">×</span></button>'
+        );
+      })
+      .join("");
+  }
+
+  function contentBounds() {
+    applySizes();
+    const list = projects();
+    if (!list.length) {
+      const a = cellToLocal(-1, -1);
+      const b = cellToLocal(2, 2);
+      return { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y };
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    list.forEach((p) => {
+      const a = cellToLocal(p.x, p.y);
+      const b = cellToLocal(p.x + p.w, p.y + p.h);
+      minX = Math.min(minX, a.x);
+      minY = Math.min(minY, a.y);
+      maxX = Math.max(maxX, b.x);
+      maxY = Math.max(maxY, b.y);
+    });
+    const rec = cellToLocal(state.recap.x, state.recap.y);
+    minX = Math.min(minX, rec.x);
+    minY = Math.min(minY, rec.y);
+    maxX = Math.max(maxX, rec.x + CELL);
+    maxY = Math.max(maxY, rec.y + CELL);
+    const pad = CELL;
+    return { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
+  }
+
+  function renderMinimap() {
+    const host = $("#minimap");
+    if (!host) return;
+    let canvas = $("canvas", host);
+    if (!canvas) {
+      canvas = document.createElement("canvas");
+      host.appendChild(canvas);
+    }
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = host.clientWidth || 168;
+    const h = host.clientHeight || 108;
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "#0c0c0c";
+    ctx.fillRect(0, 0, w, h);
+    const b = contentBounds();
+    const scale = Math.min(w / b.w, h / b.h);
+    const ox = (w - b.w * scale) / 2 - b.x * scale;
+    const oy = (h - b.h * scale) / 2 - b.y * scale;
+    applySizes();
+    projects().forEach((p) => {
+      const vs = visualState(p);
+      const loc = cellToLocal(p.x, p.y);
+      const colors = {
+        onair: "#c44545",
+        on: "#8a8a90",
+        static: "#6a7a8a",
+        night: "#3a5a78",
+        offline: "#2a2a2e",
+        ended: "#5a5a20",
+        nosignal: "#1a3a88",
+      };
+      ctx.fillStyle = colors[vs.key] || "#444";
+      ctx.fillRect(loc.x * scale + ox, loc.y * scale + oy, (p.w * CELL - GAP) * scale, (p.h * CELL - GAP) * scale);
+    });
+    if (projects().length) {
+      const loc = cellToLocal(state.recap.x, state.recap.y);
+      ctx.fillStyle = "#622";
+      ctx.fillRect(loc.x * scale + ox, loc.y * scale + oy, (CELL - GAP) * scale, (CELL - GAP) * scale);
+    }
+    const vp = $("#viewport");
+    if (vp) {
+      const vw = vp.clientWidth / camera.scale;
+      const vh = vp.clientHeight / camera.scale;
+      const vx = camera.cx - vw / 2;
+      const vy = camera.cy - vh / 2;
+      ctx.strokeStyle = "rgba(240,240,240,0.7)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(vx * scale + ox, vy * scale + oy, vw * scale, vh * scale);
+    }
+    host._map = { scale: scale, ox: ox, oy: oy };
+  }
+
+  /* —— zoom —— */
   function getProject(id) {
     return state.projects.find((p) => p.id === id);
   }
 
-  /* —— Render categories —— */
-  function renderCats() {
-    const wrap = $("#cat-tabs");
-    const cats = ["__all", ...state.categories];
-    wrap.innerHTML = cats
-      .map((c) => {
-        const label = c === "__all" ? "전체" : c;
-        const active = activeCat === c ? "is-active" : "";
-        const x =
-          c === "__all"
-            ? ""
-            : `<span class="cat-x" data-del-cat="${escapeHtml(c)}" title="삭제">×</span>`;
-        return `<button type="button" class="cat-tab ${active}" data-cat="${escapeHtml(c)}" role="tab">${escapeHtml(label)}${x}</button>`;
-      })
-      .join("");
+  function visibleUpdate(p, u) {
+    if (!u) return false;
+    if (u.private && !unlocked) return false;
+    return true;
   }
 
-  /* —— Render grid —— */
-  function renderGrid() {
-    const grid = $("#project-grid");
-    const list = filteredProjects();
-    const cards = list
-      .map((p) => {
-        const st = projectStats(p);
-        const sel = selectedId === p.id ? "is-selected" : "";
-        return `
-        <article class="pcard ${sel}" data-id="${p.id}" tabindex="0">
-          <div class="pcard-thumb">
-            <img src="${escapeHtml(p.cover)}" alt="" loading="lazy" />
-            <span class="media-badge ${escapeHtml(p.mediaType || "image")}">${mediaLabel(p.mediaType)}</span>
-          </div>
-          <div class="pcard-body">
-            <p class="pcard-cat">${escapeHtml(p.category)}</p>
-            <h3 class="pcard-name">${escapeHtml(p.name)}</h3>
-            <div class="pcard-meta">
-              <span class="status-dot ${statusClass(p.status)}"></span>
-              <span>${escapeHtml(p.status)}</span>
-              <span>·</span>
-              <span>${fmtDate(lastUpdated(p))}</span>
-            </div>
-            <p class="pcard-stats">파트 ${st.partCount} · 진행 중 ${st.ing}</p>
-          </div>
-        </article>`;
-      })
-      .join("");
-
-    const newCard = `<button type="button" class="pcard-new" id="btn-new-project">
-        <div class="plus">+</div>
-        <span>새 프로젝트</span>
-      </button>`;
-    grid.innerHTML = newCard + cards;
+  function channelUpdates(p, chId) {
+    return sortedUpdates(p).filter((u) => !chId || u.channelId === chId);
   }
 
-  /* —— Detail pane —— */
-  function renderDetail() {
-    const empty = $("#detail-empty");
-    const body = $("#detail-body");
-    const p = selectedId ? getProject(selectedId) : null;
-    if (!p) {
-      empty.classList.remove("hidden");
-      body.classList.add("hidden");
-      body.innerHTML = "";
+  function currentUpdate(p) {
+    return (p.updates || []).find((u) => u.id === currentUp) || lastUpdate(p);
+  }
+
+  function unmount3D() {
+    if (threeCtl && threeCtl.dispose) threeCtl.dispose();
+    threeCtl = null;
+  }
+
+  function mount3D(el) {
+    unmount3D();
+    const run = function (THREE) {
+    if (!THREE) {
+      el.innerHTML = '<div class="tv-nosignal"><span>Three.js 예정</span></div>';
       return;
     }
-    empty.classList.add("hidden");
-    body.classList.remove("hidden");
-
-    if (!p.parts.some((x) => x.id === activePart) && activePart !== "__all") {
-      activePart = "__all";
-    }
-
-    const updates = (p.updates || [])
-      .filter((u) => activePart === "__all" || u.partId === activePart)
-      .slice()
-      .sort((a, b) => b.date.localeCompare(a.date));
-
-    const partTabs = [
-      `<button type="button" class="part-tab ${activePart === "__all" ? "is-active" : ""}" data-part="__all">전체</button>`,
-      ...p.parts.map(
-        (pt) =>
-          `<button type="button" class="part-tab ${activePart === pt.id ? "is-active" : ""}" data-part="${pt.id}">${escapeHtml(pt.name)}</button>`
-      ),
-      `<button type="button" class="part-tab add" id="btn-add-part">+ 파트</button>`,
-    ].join("");
-
-    const timeline =
-      updates.length === 0
-        ? `<p class="tl-empty">이 파트에 업데이트가 아직 없어요.</p>`
-        : updates
-            .map((u) => {
-              const part = p.parts.find((x) => x.id === u.partId);
-              const mediaHtml = (u.media || [])
-                .map((m) => {
-                  if (m.type === "image" && m.src)
-                    return `<img src="${escapeHtml(m.src)}" alt="" />`;
-                  if (m.type === "video")
-                    return m.src
-                      ? `<img src="${escapeHtml(m.src)}" alt="영상" title="영상" />`
-                      : `<div class="media-chip">▶ 영상</div>`;
-                  if (m.type === "model3d")
-                    return m.src
-                      ? `<img src="${escapeHtml(m.src)}" alt="3D" title="3D" />`
-                      : `<div class="media-chip">⬡ 3D</div>`;
-                  return "";
-                })
-                .join("");
-
-              return `
-              <article class="tl-item">
-                <p class="tl-date">${fmtDate(u.date)}</p>
-                <h4 class="tl-title">${escapeHtml(u.title)}${
-                part && activePart === "__all"
-                  ? `<span class="tl-part-tag">${escapeHtml(part.name)}</span>`
-                  : ""
-              }</h4>
-                ${u.detail ? `<p class="tl-detail">${escapeHtml(u.detail)}</p>` : ""}
-                ${mediaHtml ? `<div class="tl-media">${mediaHtml}</div>` : ""}
-              </article>`;
-            })
-            .join("");
-
-    body.innerHTML = `
-      <img class="detail-cover" src="${escapeHtml(p.cover)}" alt="" />
-      <div class="detail-head">
-        <p class="detail-cat">${escapeHtml(p.category)}</p>
-        <h2 class="detail-title">${escapeHtml(p.name)}</h2>
-        <div class="detail-status-row">
-          <span class="status-dot ${statusClass(p.status)}"></span>
-          <span>${escapeHtml(p.status)}</span>
-        </div>
-        <div class="detail-dates">
-          <span>시작 ${fmtDate(p.started)}</span>
-          <span>최근 업데이트 ${fmtDate(p.updated)}</span>
-        </div>
-      </div>
-      <div class="part-tabs">${partTabs}</div>
-      <button type="button" class="btn-add-update" id="btn-open-update">+ 업데이트 추가</button>
-      <div class="timeline">${timeline}</div>
-    `;
-  }
-
-  function renderAll() {
-    document.body.classList.toggle("cats-editing", catsEditing);
-    $("#btn-edit-cats").classList.toggle("is-on", catsEditing);
-    $("#btn-edit-cats").textContent = catsEditing ? "완료" : "편집";
-    renderCats();
-    renderGrid();
-    renderDetail();
-  }
-
-  /* —— Modals —— */
-  function openModal(id) {
-    const m = $(id);
-    m.hidden = false;
-    document.body.classList.add("modal-open");
-  }
-  function closeModal(el) {
-    const m = el.closest(".modal");
-    if (!m) return;
-    m.hidden = true;
-    if ($$(".modal:not([hidden])").length === 0) {
-      document.body.classList.remove("modal-open");
-    }
-  }
-  function closeAllModals() {
-    $$(".modal").forEach((m) => (m.hidden = true));
-    document.body.classList.remove("modal-open");
-  }
-
-  function fillCatSelect(sel) {
-    sel.innerHTML = state.categories
-      .map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`)
-      .join("");
-  }
-
-  function openUpdateModal() {
-    const p = getProject(selectedId);
-    if (!p) return;
-    const sel = $("#fu-part");
-    sel.innerHTML = p.parts
-      .map((pt) => `<option value="${pt.id}">${escapeHtml(pt.name)}</option>`)
-      .join("");
-    if (activePart !== "__all") sel.value = activePart;
-    $("#fu-title").value = "";
-    $("#fu-detail").value = "";
-    $("#fu-media-type").value = "image";
-    pendingFileName = "";
-    const dz = $("#fu-drop");
-    dz.classList.remove("has-file");
-    $("p", dz).textContent = "파일을 끌어다 놓거나 클릭해서 선택";
-    openModal("#modal-update");
-    setTimeout(() => $("#fu-title").focus(), 50);
-  }
-
-  /* —— Events —— */
-  $("#cat-tabs").addEventListener("click", (e) => {
-    const del = e.target.closest("[data-del-cat]");
-    if (del) {
-      e.stopPropagation();
-      const name = del.dataset.delCat;
-      if (!confirm(`「${name}」 카테고리를 삭제할까요?\n(해당 프로젝트는 남아 있어요)`)) return;
-      state.categories = state.categories.filter((c) => c !== name);
-      if (activeCat === name) activeCat = "__all";
-      save();
-      renderAll();
-      return;
-    }
-    const tab = e.target.closest("[data-cat]");
-    if (!tab) return;
-    activeCat = tab.dataset.cat;
-    renderAll();
-  });
-
-  $("#btn-edit-cats").addEventListener("click", () => {
-    catsEditing = !catsEditing;
-    renderAll();
-  });
-
-  $("#btn-add-cat").addEventListener("click", () => {
-    $("#fc-name").value = "";
-    openModal("#modal-cat");
-    setTimeout(() => $("#fc-name").focus(), 50);
-  });
-
-  $("#project-grid").addEventListener("click", (e) => {
-    if (e.target.closest("#btn-new-project")) {
-      fillCatSelect($("#fp-cat"));
-      $("#fp-name").value = "";
-      $("#fp-status").value = "진행 중";
-      openModal("#modal-project");
-      setTimeout(() => $("#fp-name").focus(), 50);
-      return;
-    }
-    const card = e.target.closest(".pcard[data-id]");
-    if (!card) return;
-    selectedId = card.dataset.id;
-    activePart = "__all";
-    renderAll();
-  });
-
-  $("#project-grid").addEventListener("keydown", (e) => {
-    const card = e.target.closest(".pcard[data-id]");
-    if (!card) return;
-    if (e.key === "Enter" || e.key === " ") {
+    const w = el.clientWidth || 640;
+    const h = el.clientHeight || 360;
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111116);
+    const cam = new THREE.PerspectiveCamera(50, w / h, 0.1, 100);
+    cam.position.set(0, 0.55, 3.2);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(w, h);
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    el.appendChild(renderer.domElement);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+    dir.position.set(2.4, 3, 4);
+    scene.add(dir);
+    const cube = new THREE.Mesh(
+      new THREE.BoxGeometry(1.15, 1.15, 1.15),
+      new THREE.MeshStandardMaterial({ color: 0x7a6cff, metalness: 0.22, roughness: 0.38 })
+    );
+    scene.add(cube);
+    let spinning = false, lx = 0, ly = 0, mx = 0.4, my = 0.25, dist = 3.2;
+    const onDown = (e) => { spinning = true; lx = e.clientX; ly = e.clientY; el.setPointerCapture(e.pointerId); };
+    const onMove = (e) => {
+      if (!spinning) return;
+      mx += (e.clientX - lx) * 0.01;
+      my += (e.clientY - ly) * 0.01;
+      lx = e.clientX;
+      ly = e.clientY;
+    };
+    const onUp = () => { spinning = false; };
+    const onWheel = (e) => {
       e.preventDefault();
-      selectedId = card.dataset.id;
-      activePart = "__all";
-      renderAll();
-    }
-  });
-
-  $("#detail-body").addEventListener("click", (e) => {
-    const partBtn = e.target.closest("[data-part]");
-    if (partBtn) {
-      activePart = partBtn.dataset.part;
-      renderDetail();
+      e.stopPropagation();
+      dist = Math.min(8, Math.max(1.4, dist + e.deltaY * 0.005));
+    };
+    el.addEventListener("pointerdown", onDown);
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("wheel", onWheel, { passive: false });
+    let raf = 0;
+    const loop = () => {
+      raf = requestAnimationFrame(loop);
+      cube.rotation.y = mx;
+      cube.rotation.x = my;
+      cam.position.z = dist;
+      renderer.render(scene, cam);
+    };
+    loop();
+    threeCtl = {
+      dispose: function () {
+        cancelAnimationFrame(raf);
+        el.removeEventListener("pointerdown", onDown);
+        el.removeEventListener("pointermove", onMove);
+        el.removeEventListener("pointerup", onUp);
+        el.removeEventListener("wheel", onWheel);
+        renderer.dispose();
+        el.innerHTML = "";
+      },
+    };
+    };
+    if (window.THREE) {
+      run(window.THREE);
       return;
     }
-    if (e.target.closest("#btn-add-part")) {
-      $("#fpart-name").value = "";
-      openModal("#modal-part");
-      setTimeout(() => $("#fpart-name").focus(), 50);
-      return;
-    }
-    if (e.target.closest("#btn-open-update")) {
-      openUpdateModal();
-    }
-  });
-
-  $("#search").addEventListener("input", (e) => {
-    searchQ = e.target.value;
-    renderGrid();
-  });
-
-  // modal close
-  document.addEventListener("click", (e) => {
-    if (e.target.matches("[data-close]")) closeModal(e.target);
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeAllModals();
-  });
-
-  // dropzone
-  const drop = $("#fu-drop");
-  drop.addEventListener("click", () => $("#fu-file").click());
-  drop.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    drop.classList.add("is-drag");
-  });
-  drop.addEventListener("dragleave", () => drop.classList.remove("is-drag"));
-  drop.addEventListener("drop", (e) => {
-    e.preventDefault();
-    drop.classList.remove("is-drag");
-    const f = e.dataTransfer.files?.[0];
-    if (f) setPendingFile(f.name);
-  });
-  $("#fu-file").addEventListener("change", (e) => {
-    const f = e.target.files?.[0];
-    if (f) setPendingFile(f.name);
-  });
-  function setPendingFile(name) {
-    pendingFileName = name;
-    drop.classList.add("has-file");
-    $("p", drop).textContent = `선택됨: ${name}`;
+    import("https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js")
+      .then(function (mod) {
+        window.THREE = mod;
+        run(mod);
+      })
+      .catch(function () {
+        el.innerHTML = '<div class="tv-nosignal"><span>Three.js 예정</span></div>';
+      });
   }
 
-  $("#form-update").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const p = getProject(selectedId);
+  function renderZoom() {
+    const p = getProject(currentId);
+    if (!p) return closeZoom();
+    const vs = visualState(p);
+    const u = currentUpdate(p);
+    const files = u && visibleUpdate(p, u) ? u.files || [] : [];
+    if (currentFile >= files.length) currentFile = 0;
+    const file = files[currentFile];
+
+    const big = $("#big-tv");
+    big.className = "tv tv-big size-2x2 state-" + vs.key;
+    let kind = vs.key === "nosignal" ? "nosignal" : vs.key === "ended" ? "ended" : vs.key === "offline" ? "offline" : vs.key === "static" ? "static" : "image";
+    const hideContent = (p.private && !unlocked) || (u && u.private && !unlocked);
+    if (hideContent) kind = "nosignal";
+    if (p.completed && !hideContent) kind = "ended";
+
+    let src = file ? file.src : coverOf(p);
+    if (hideContent) src = "";
+    big.innerHTML = tvScreenHTML({
+      kind: kind === "ended" ? "ended" : kind,
+      src: hideContent ? "" : src,
+      name: p.name,
+      badge: hideContent ? "NO SIGNAL" : vs.badge,
+      dot: !hideContent && vs.dot,
+    });
+
+    const screen = $(".tv-screen", big);
+    if (!hideContent && file && file.type === "model3d") {
+      const holder = document.createElement("div");
+      holder.id = "viewer3d";
+      screen.insertBefore(holder, screen.firstChild);
+      const note = document.createElement("div");
+      note.className = "model-note";
+      note.textContent = "Three.js · 드래그로 회전 · 휠로 줌";
+      screen.appendChild(note);
+      requestAnimationFrame(() => mount3D(holder));
+    } else {
+      unmount3D();
+      if (!hideContent && file && file.type === "video") {
+        const layer = document.createElement("div");
+        layer.className = "play-layer";
+        layer.textContent = "▶";
+        layer.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (layer.classList.contains("is-playing")) {
+            layer.classList.remove("is-playing");
+            layer.textContent = "▶";
+            const vid = $("video", screen);
+            if (vid) vid.pause();
+          } else {
+            layer.classList.add("is-playing");
+            layer.textContent = "";
+            if (file.src && /\.(mp4|webm|ogg)$/i.test(file.src) || (file.src || "").indexOf("video") === 5) {
+              let vid = $("video", screen);
+              if (!vid && (file.src || "").slice(0, 10) === "data:video") {
+                vid = document.createElement("video");
+                vid.src = file.src;
+                vid.controls = true;
+                vid.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:cover";
+                screen.insertBefore(vid, screen.firstChild);
+                vid.play();
+              }
+            }
+          }
+        });
+        screen.appendChild(layer);
+      }
+    }
+
+    const meta = $("#zoom-meta");
+    if (hideContent) {
+      meta.innerHTML = '<p class="zm-sub">NO SIGNAL</p>';
+    } else if (u) {
+      const ch = (p.channels || []).find((c) => c.id === u.channelId);
+      meta.innerHTML =
+        "<h3>" + esc(u.mood || "") + " " + esc(u.title || "제목 없음") + "</h3>" +
+        '<div class="zm-sub">' + esc(u.date) + (ch ? " · " + esc(ch.name) : "") + "</div>" +
+        (u.description ? '<p class="zm-desc">' + esc(u.description) + "</p>" : "") +
+        (u.nextTodo || p.nextTodo ? '<p class="zm-todo">다음 · ' + esc(u.nextTodo || p.nextTodo) + "</p>" : "");
+    } else {
+      meta.innerHTML = '<p class="zm-sub">아직 방송이 없어. ON AIR로 첫 송출을 해볼까?</p>';
+    }
+
+    const tabs = $("#channel-tabs");
+    tabs.innerHTML = (p.channels || [])
+      .map((c) => '<button type="button" class="ch-tab' + (c.id === currentCh ? " is-on" : "") + '" data-ch="' + esc(c.id) + '">' + esc(c.name) + "</button>")
+      .join("") +
+      '<button type="button" class="ch-tab add" id="btn-add-ch">+ 새 채널</button>';
+
+    const row = $("#vhs-row");
+    const tapes = channelUpdates(p, currentCh);
+    row.innerHTML = tapes
+      .map((t) => {
+        const hidden = t.private && !unlocked;
+        return (
+          '<button type="button" class="vhs' + (t.id === currentUp ? " is-on" : "") + (hidden ? " is-priv" : "") + '" data-up="' + esc(t.id) + '">' +
+          '<span class="vhs-label"><em>' + esc(t.date.slice(5)) + "</em><b>" + esc(hidden ? "NO SIGNAL" : (t.title || "무제")) + "</b></span></button>"
+        );
+      })
+      .join("") || '<p class="zm-sub">이 채널엔 아직 테이프가 없어.</p>';
+
+    const slots = $("#file-slots");
+    if (hideContent || !files.length) {
+      slots.innerHTML = "";
+    } else {
+      slots.innerHTML = files
+        .map((f, i) => {
+          if (f.type === "image") {
+            return '<button type="button" class="fslot' + (i === currentFile ? " is-on" : "") + '" data-fi="' + i + '"><img alt="" src="' + esc(f.src) + '" /></button>';
+          }
+          return '<button type="button" class="fslot ' + esc(f.type) + (i === currentFile ? " is-on" : "") + '" data-fi="' + i + '">' + (f.type === "model3d" ? "3D" : "영상") + "</button>";
+        })
+        .join("");
+    }
+
+    $("#btn-prev-file").disabled = files.length < 2;
+    $("#btn-next-file").disabled = files.length < 2;
+    $("#btn-complete").textContent = p.completed ? "다시 켜기" : "방송 종료";
+    $("#btn-toggle-private").textContent = p.private ? "공개로 전환" : "비공개 전환";
+  }
+
+  function openZoom(id) {
+    const p = getProject(id);
     if (!p) return;
-    const mediaType = $("#fu-media-type").value;
-    const media = [];
-    if (mediaType !== "none") {
-      // reuse a placeholder thumb for mock
-      const thumbs = [
-        "images/th-02.jpg",
-        "images/th-12.jpg",
-        "images/th-13.jpg",
-        "images/th-14.jpg",
-        "images/th-15.jpg",
-      ];
-      media.push({
-        type: mediaType,
-        src: thumbs[Math.floor(Math.random() * thumbs.length)],
-        name: pendingFileName || undefined,
+    currentId = id;
+    const latest = lastUpdate(p);
+    currentCh = latest ? latest.channelId : (p.channels[0] && p.channels[0].id);
+    currentUp = latest ? latest.id : null;
+    currentFile = 0;
+    $("#zoom-view").hidden = false;
+    $("#proj-menu").hidden = true;
+    document.body.classList.remove("on-wall");
+    renderZoom();
+  }
+
+  function closeZoom() {
+    unmount3D();
+    $("#zoom-view").hidden = true;
+    $("#proj-menu").hidden = true;
+    currentId = null;
+    document.body.classList.add("on-wall");
+    renderWall();
+  }
+
+  /* —— recap —— */
+  function rangeFor(period) {
+    const t = today();
+    if (period === "month") {
+      return [new Date(t.getFullYear(), t.getMonth(), 1), new Date(t.getFullYear(), t.getMonth() + 1, 0)];
+    }
+    const day = t.getDay();
+    const monday = day === 0 ? -6 : 1 - day;
+    const start = new Date(t);
+    start.setDate(t.getDate() + monday);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return [start, end];
+  }
+
+  function inRange(dateStr, range) {
+    const d = parseDay(dateStr);
+    return d >= range[0] && d <= range[1];
+  }
+
+  function collectRecap(period) {
+    const range = rangeFor(period);
+    const items = [];
+    projects().forEach((p) => {
+      (p.updates || []).forEach((u) => {
+        if (!inRange(u.date, range)) return;
+        if (u.private && !unlocked) return;
+        if (p.private && !unlocked) return;
+        const ch = (p.channels || []).find((c) => c.id === u.channelId);
+        items.push({
+          project: p,
+          update: u,
+          channelName: ch ? ch.name : "본방송",
+          src: (u.files && u.files[0] && u.files[0].src) || coverOf(p),
+        });
+      });
+    });
+    items.sort((a, b) => (a.update.date < b.update.date ? 1 : -1));
+    return { range: range, items: items };
+  }
+
+  function renderRecap() {
+    const rec = collectRecap(recapPeriod);
+    const page = $("#recap-page");
+    const title = recapPeriod === "month"
+      ? today().getFullYear() + "년 " + (today().getMonth() + 1) + "월"
+      : fmtDay(rec.range[0]).slice(5) + " – " + fmtDay(rec.range[1]).slice(5);
+    const activeNow = projects().filter((p) => {
+      const k = visualState(p).key;
+      return k === "onair" || k === "on";
+    }).length;
+    const completed = projects().filter((p) => p.completed).length;
+    const tvSet = new Set(rec.items.map((i) => i.project.id));
+
+    const points = rec.items.slice().reverse();
+    const w = 680, h = 180, pad = 28;
+    let chart = '<svg class="mood-chart" viewBox="0 0 ' + w + " " + h + '" preserveAspectRatio="none">';
+    chart += '<line x1="' + pad + '" y1="' + (h - pad) + '" x2="' + (w - 10) + '" y2="' + (h - pad) + '" stroke="#2a2a2e"/>';
+    if (points.length) {
+      const coords = points.map((it, i) => {
+        const x = pad + (points.length === 1 ? (w - pad - 10) / 2 : (i / (points.length - 1)) * (w - pad - 20));
+        const val = MOOD_VAL[it.update.mood] || 3;
+        const y = h - pad - ((val - 1) / 4) * (h - pad * 2);
+        return { x: x, y: y, mood: it.update.mood || "😐" };
+      });
+      const d = coords.map((c, i) => (i ? "L" : "M") + c.x.toFixed(1) + " " + c.y.toFixed(1)).join(" ");
+      chart += '<path d="' + d + '" fill="none" stroke="#c44545" stroke-width="2"/>';
+      coords.forEach((c) => {
+        chart += '<circle cx="' + c.x + '" cy="' + c.y + '" r="4" fill="#1a1a1c" stroke="#c44545"/>';
+        chart += '<text x="' + c.x + '" y="' + (c.y - 10) + '" text-anchor="middle" font-size="12">' + c.mood + "</text>";
       });
     }
-    const today = new Date();
-    const ds = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    p.updates.unshift({
-      id: uid("u"),
-      partId: $("#fu-part").value,
-      date: ds,
-      title: $("#fu-title").value.trim(),
-      detail: $("#fu-detail").value.trim(),
-      media,
+    chart += "</svg>";
+    if (!points.length) chart = '<p class="zm-sub">이 기간엔 기분 기록이 없어.</p>';
+
+    const byCh = {};
+    rec.items.forEach((it) => {
+      const name = it.channelName;
+      byCh[name] = byCh[name] || [];
+      if (it.update.mood) byCh[name].push(it.update.mood);
     });
-    p.updated = ds;
-    // bump part status to 진행 중 if was 보류
-    const part = p.parts.find((x) => x.id === $("#fu-part").value);
-    if (part && part.status === "보류") part.status = "진행 중";
-    if (p.status === "보류") p.status = "진행 중";
-    save();
-    closeAllModals();
-    renderAll();
-  });
+    const chRows = Object.keys(byCh)
+      .map((name) => {
+        const counts = {};
+        byCh[name].forEach((m) => { counts[m] = (counts[m] || 0) + 1; });
+        const emojis = Object.keys(counts)
+          .sort((a, b) => counts[b] - counts[a])
+          .map((m) => m + " ×" + counts[m])
+          .join("   ");
+        return '<div class="ch-mood-row"><strong>' + esc(name) + '</strong><div class="emojis">' + emojis + "</div></div>";
+      })
+      .join("") || '<p class="zm-sub">아직 채널별 기록이 없어.</p>';
 
-  $("#form-project").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const today = new Date();
-    const ds = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    const covers = [
-      "images/th-01.jpg",
-      "images/th-03.jpg",
-      "images/th-09.jpg",
-      "images/th-11.jpg",
-      "images/th-13.jpg",
-    ];
-    const proj = {
-      id: uid("p"),
-      name: $("#fp-name").value.trim(),
-      category: $("#fp-cat").value,
-      status: $("#fp-status").value,
-      cover: covers[Math.floor(Math.random() * covers.length)],
-      mediaType: "image",
-      started: ds,
-      updated: ds,
-      parts: [{ id: uid("pt"), name: "메인", status: $("#fp-status").value }],
-      updates: [],
-    };
-    state.projects.unshift(proj);
-    selectedId = proj.id;
-    activePart = "__all";
-    activeCat = "__all";
-    save();
-    closeAllModals();
-    renderAll();
-  });
+    const thumbs = rec.items
+      .map((it) => {
+        const img = it.src
+          ? '<img alt="" src="' + esc(it.src) + '" />'
+          : '<img alt="" />';
+        return "<figure>" + img + "<figcaption>" + esc(it.update.date.slice(5)) + " · " + esc(it.update.title) + "</figcaption></figure>";
+      })
+      .join("") || '<p class="zm-sub">이 기간의 방송이 없어.</p>';
 
-  $("#form-cat").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const name = $("#fc-name").value.trim();
-    if (!name) return;
-    if (state.categories.includes(name)) {
-      alert("이미 있는 카테고리예요.");
+    const todos = [];
+    const seen = new Set();
+    rec.items.forEach((it) => {
+      const t = it.update.nextTodo || it.project.nextTodo;
+      if (!t || seen.has(it.project.id + t)) return;
+      seen.add(it.project.id + t);
+      todos.push({ name: it.project.name, text: t });
+    });
+    projects().forEach((p) => {
+      if (!p.nextTodo || seen.has(p.id + p.nextTodo)) return;
+      if (tvSet.has(p.id) || daysBetween(lastDate(p)) <= 14) {
+        seen.add(p.id + p.nextTodo);
+        todos.push({ name: p.name, text: p.nextTodo });
+      }
+    });
+
+    page.innerHTML =
+      '<p class="recap-kicker">RECAP</p>' +
+      "<h1>" + esc(title) + " 특집</h1>" +
+      '<div class="recap-cards">' +
+      '<div class="recap-card"><div class="num">' + rec.items.length + '</div><div class="lbl">이번 ' + (recapPeriod === "month" ? "달" : "주") + " 방송</div></div>" +
+      '<div class="recap-card"><div class="num">' + activeNow + '</div><div class="lbl">지금 켜진 TV</div></div>' +
+      '<div class="recap-card"><div class="num">' + completed + '</div><div class="lbl">완결한 프로젝트</div></div>' +
+      "</div>" +
+      '<section class="recap-sec"><h2>기분 시청률</h2>' + chart + "</section>" +
+      '<section class="recap-sec"><h2>채널별 기분</h2><div class="ch-moods">' + chRows + "</div></section>" +
+      '<section class="recap-sec"><h2>그 기간의 방송</h2><div class="recap-thumbs">' + thumbs + "</div></section>" +
+      '<section class="recap-sec"><h2>이어서 할 일</h2><ul class="todo-list">' +
+      (todos.map((t) => "<li><span class=\"t-proj\">" + esc(t.name) + "</span>" + esc(t.text) + "</li>").join("") || "<li>적힌 다음 할 일이 없어.</li>") +
+      "</ul></section>";
+  }
+
+  function openRecap() {
+    $("#recap-view").hidden = false;
+    document.body.classList.remove("on-wall");
+    renderRecap();
+  }
+
+  function closeRecap() {
+    $("#recap-view").hidden = true;
+    document.body.classList.add("on-wall");
+  }
+
+  /* —— on air —— */
+  function fileKind(file) {
+    if (file.type.indexOf("video") === 0) return "video";
+    if (/\.(glb|gltf|obj)$/i.test(file.name)) return "model3d";
+    return "image";
+  }
+
+  function readFiles(list) {
+    Array.from(list).forEach((file) => {
+      const kind = fileKind(file);
+      const reader = new FileReader();
+      reader.onload = () => {
+        oaFiles.push({ type: kind, src: reader.result, name: file.name });
+        renderOaPreviews();
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderOaPreviews() {
+    const box = $("#oa-previews");
+    box.innerHTML = oaFiles
+      .map((f) => {
+        if (f.type === "image") return '<img alt="" src="' + esc(f.src) + '" />';
+        return '<div class="oa-file">' + esc(f.type === "video" ? "영상" : "3D") + "</div>";
+      })
+      .join("");
+  }
+
+  function openOnAir() {
+    const p = getProject(currentId);
+    if (!p) return;
+    oaFiles = [];
+    oaMood = "😊";
+    $("#oa-title").value = "";
+    $("#oa-desc").value = "";
+    $("#oa-todo").value = p.nextTodo || "";
+    $("#oa-private").checked = false;
+    $("#oa-channel").innerHTML = (p.channels || [])
+      .map((c) => '<option value="' + esc(c.id) + '"' + (c.id === currentCh ? " selected" : "") + ">" + esc(c.name) + "</option>")
+      .join("");
+    $("#oa-moods").innerHTML = MOODS.map((m) =>
+      '<button type="button" data-mood="' + m + '"' + (m === oaMood ? ' class="is-on"' : "") + ">" + m + "</button>"
+    ).join("");
+    renderOaPreviews();
+    $("#onair-view").hidden = false;
+  }
+
+  function closeOnAir() {
+    $("#onair-view").hidden = true;
+  }
+
+  function playBroadcast(done) {
+    const fx = $("#broadcast-fx");
+    fx.hidden = false;
+    fx.className = "broadcast-fx show-light";
+    setTimeout(() => {
+      fx.className = "broadcast-fx show-static";
+      setTimeout(() => {
+        fx.hidden = true;
+        fx.className = "broadcast-fx";
+        if (done) done();
+      }, 380);
+    }, 1000);
+  }
+
+  /* —— password —— */
+  function ensureEdit(fn) {
+    if (unlocked) {
+      fn();
       return;
     }
-    state.categories.push(name);
-    activeCat = name;
-    save();
-    closeAllModals();
-    renderAll();
-  });
+    pendingEdit = fn;
+    $("#pass-err").hidden = true;
+    $("#pass-input").value = "";
+    $("#pass-view").hidden = false;
+    setTimeout(() => $("#pass-input").focus(), 30);
+  }
 
-  $("#form-part").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const p = getProject(selectedId);
+  function closePass() {
+    $("#pass-view").hidden = true;
+    pendingEdit = null;
+  }
+
+  /* —— search —— */
+  function searchItems(q) {
+    q = q.trim().toLowerCase();
+    if (!q) return [];
+    const out = [];
+    projects().forEach((p) => {
+      const vs = visualState(p);
+      const blob = (p.name + " " + (p.category || "") + " " + (p.nextTodo || "") + " " +
+        (p.updates || []).map((u) => u.title + " " + (u.description || "")).join(" ")).toLowerCase();
+      if (blob.indexOf(q) !== -1) {
+        out.push({ p: p, vs: vs });
+      }
+    });
+    return out;
+  }
+
+  function renderSearch() {
+    const q = $("#search").value;
+    const box = $("#search-results");
+    if (!q.trim()) {
+      box.hidden = true;
+      box.innerHTML = "";
+      searchIndex = -1;
+      return;
+    }
+    const items = searchItems(q);
+    if (!items.length) {
+      box.hidden = false;
+      box.innerHTML = '<li class="search-empty">찾는 TV가 없어...</li>';
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = items
+      .map((it, i) => {
+        const src = coverOf(it.p);
+        const img = src && !(it.p.private && !unlocked)
+          ? '<img alt="" src="' + esc(src) + '" />'
+          : '<img alt="" />';
+        return (
+          '<li><button type="button" class="search-hit' + (i === searchIndex ? " is-active" : "") + '" data-sid="' + esc(it.p.id) + '">' +
+          img + "<div><div class=\"sh-name\">" + esc(it.p.name) + "</div>" +
+          '<div class="sh-status">' + esc(it.vs.label) + " · " + esc(it.p.category || "") + "</div></div></button></li>"
+        );
+      })
+      .join("");
+  }
+
+  function goToSearch(id) {
+    $("#search-results").hidden = true;
+    closeRecap();
+    if (currentId) closeZoom();
+    const p = getProject(id);
     if (!p) return;
-    const name = $("#fpart-name").value.trim();
-    const part = { id: uid("pt"), name, status: "진행 중" };
-    p.parts.push(part);
-    activePart = part.id;
-    save();
-    closeAllModals();
-    renderAll();
-  });
+    document.body.classList.add("on-wall");
+    renderWall();
+    flyToProject(p);
+  }
 
-  // expose for screenshots / debugging
-  window.__archive = {
-    select(id) {
-      selectedId = id;
-      activePart = "__all";
-      renderAll();
+  /* —— trash / shelf —— */
+  function renderTrash() {
+    const body = $("#trash-body");
+    const items = state.trash || [];
+    if (!items.length) {
+      body.innerHTML = '<p class="trash-empty">창고가 비어 있어.</p>';
+      return;
+    }
+    body.innerHTML = items
+      .map((p) => {
+        const left = 30 - daysBetween(p.deletedAt);
+        const src = coverOf(p);
+        return (
+          '<div class="trash-item" data-tid="' + esc(p.id) + '">' +
+          (src ? '<img alt="" src="' + esc(src) + '" />' : '<img alt="" />') +
+          "<div><div class=\"ti-name\">" + esc(p.name) + "</div>" +
+          '<div class="ti-days">' + left + "일 뒤 사라짐</div></div>" +
+          '<div class="ti-acts"><button type="button" class="hud-btn" data-restore="' + esc(p.id) + '">되돌리기</button>' +
+          '<button type="button" class="hud-btn" data-purge="' + esc(p.id) + '">삭제</button></div></div>'
+        );
+      })
+      .join("");
+  }
+
+  function renderShelf() {
+    const p = getProject(currentId);
+    const body = $("#shelf-body");
+    if (!p) return;
+    body.innerHTML = (p.channels || [])
+      .map((ch) => {
+        const tapes = channelUpdates(p, ch.id)
+          .map((t) => {
+            const hidden = t.private && !unlocked;
+            return (
+              '<button type="button" class="vhs' + (t.id === currentUp ? " is-on" : "") + (hidden ? " is-priv" : "") + '" data-up="' + esc(t.id) + '">' +
+              '<span class="vhs-label"><em>' + esc(t.date.slice(5)) + "</em><b>" + esc(hidden ? "NO SIGNAL" : (t.title || "무제")) + "</b></span></button>"
+            );
+          })
+          .join("");
+        return '<div class="shelf-group"><h3>' + esc(ch.name) + "</h3><div class=\"shelf-tapes\">" + (tapes || "<span class=\"zm-sub\">빈 칸</span>") + "</div></div>";
+      })
+      .join("");
+  }
+
+  /* —— mutations —— */
+  function createProject() {
+    if (previewEmpty) {
+      previewEmpty = false;
+    }
+    applySizes();
+    const pos = findEmpty(1, 1);
+    const p = {
+      id: uid("p"),
+      name: "더미 프로젝트",
+      category: state.categories[0] || "미분류",
+      completed: false,
+      private: false,
+      nextTodo: "",
+      x: pos.x,
+      y: pos.y,
+      channels: [{ id: uid("ch"), name: "본방송" }],
+      updates: [],
+    };
+    state.projects.push(p);
+    saveState();
+    renderWall();
+    renderCats();
+    flyToProject(p);
+    openZoom(p.id);
+  }
+
+  function submitOnAir(e) {
+    e.preventDefault();
+    const p = getProject(currentId);
+    if (!p) return;
+    const title = $("#oa-title").value.trim();
+    if (!title && !oaFiles.length) {
+      $("#oa-title").focus();
+      return;
+    }
+    const ch = $("#oa-channel").value || (p.channels[0] && p.channels[0].id);
+    const todo = $("#oa-todo").value.trim();
+    const update = {
+      id: uid("u"),
+      channelId: ch,
+      date: fmtDay(today()),
+      title: title || (oaFiles[0] && oaFiles[0].name) || "새 방송",
+      description: $("#oa-desc").value.trim(),
+      nextTodo: todo,
+      mood: oaMood,
+      private: $("#oa-private").checked,
+      files: oaFiles.slice(),
+    };
+    p.updates = p.updates || [];
+    p.updates.push(update);
+    if (todo) p.nextTodo = todo;
+    growProject(p);
+    saveState();
+    currentCh = ch;
+    currentUp = update.id;
+    currentFile = 0;
+    closeOnAir();
+    playBroadcast(() => {
+      renderZoom();
+      renderWall();
+    });
+  }
+
+  /* —— events —— */
+  function bindEvents() {
+    const vp = $("#viewport");
+
+    vp.addEventListener("wheel", (e) => {
+      if (!$("#zoom-view").hidden || !$("#recap-view").hidden) return;
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        const factor = Math.exp(-e.deltaY * 0.0015);
+        const next = Math.min(SCALE_MAX, Math.max(SCALE_MIN, camera.scale * factor));
+        const world = worldFromEvent(e);
+        const k = next / camera.scale;
+        camera.cx = world.x - (world.x - camera.cx) * k;
+        camera.cy = world.y - (world.y - camera.cy) * k;
+        camera.scale = next;
+        applyCamera();
+      } else {
+        camera.cx += e.deltaX / camera.scale;
+        camera.cy += e.deltaY / camera.scale;
+        applyCamera();
+      }
+    }, { passive: false });
+
+    vp.addEventListener("pointerdown", (e) => {
+      if (!$("#zoom-view").hidden) return;
+      const tv = e.target.closest(".tv");
+      if (tv && tv.dataset.id) {
+        const p = getProject(tv.dataset.id);
+        if (!p) return;
+        const world = worldFromEvent(e);
+        const loc = cellToLocal(p.x, p.y);
+        drag = {
+          id: p.id,
+          startX: e.clientX,
+          startY: e.clientY,
+          ox: world.x - loc.x,
+          oy: world.y - loc.y,
+          moved: false,
+          pointer: e.pointerId,
+        };
+        return;
+      }
+      pan = { x: e.clientX, y: e.clientY, pointer: e.pointerId };
+      vp.classList.add("is-panning");
+      vp.setPointerCapture(e.pointerId);
+    });
+
+    vp.addEventListener("pointermove", (e) => {
+      if (drag) {
+        const dx = e.clientX - drag.startX;
+        const dy = e.clientY - drag.startY;
+        if (!drag.moved && dx * dx + dy * dy > 36) {
+          if (!unlocked) {
+            const id = drag.id;
+            drag = null;
+            ensureEdit(() => {});
+            return;
+          }
+          drag.moved = true;
+          skipClick = true;
+          const el = $('#wall .tv[data-id="' + drag.id + '"]');
+          if (el) el.classList.add("is-dragging");
+        }
+        if (drag && drag.moved) {
+          const world = worldFromEvent(e);
+          const el = $('#wall .tv[data-id="' + drag.id + '"]');
+          if (el) {
+            el.style.left = world.x - drag.ox + "px";
+            el.style.top = world.y - drag.oy + "px";
+          }
+        }
+        return;
+      }
+      if (pan) {
+        camera.cx -= (e.clientX - pan.x) / camera.scale;
+        camera.cy -= (e.clientY - pan.y) / camera.scale;
+        pan.x = e.clientX;
+        pan.y = e.clientY;
+        applyCamera();
+      }
+    });
+
+    function endPointer(e) {
+      vp.classList.remove("is-panning");
+      if (drag) {
+        const info = drag;
+        drag = null;
+        if (info.moved) {
+          const p = getProject(info.id);
+          const el = $('#wall .tv[data-id="' + info.id + '"]');
+          if (el) el.classList.remove("is-dragging");
+          if (p) {
+            const world = worldFromEvent(e);
+            const tlx = world.x - info.ox;
+            const tly = world.y - info.oy;
+            const nx = Math.round(tlx / CELL + GRID_MIN);
+            const ny = Math.round(tly / CELL + GRID_MIN);
+            const dirX = nx - p.x;
+            const dirY = ny - p.y;
+            const dir = Math.abs(dirX) >= Math.abs(dirY) ? (dirX < 0 ? "left" : "right") : (dirY < 0 ? "up" : "down");
+            p.x = nx;
+            p.y = ny;
+            resolveCollisions(p, dir, 0);
+            saveState();
+            renderWall();
+          }
+        }
+        setTimeout(() => { skipClick = false; }, 40);
+      }
+      pan = null;
+    }
+    vp.addEventListener("pointerup", endPointer);
+    vp.addEventListener("pointercancel", endPointer);
+
+    vp.addEventListener("click", (e) => {
+      if (skipClick) return;
+      const tv = e.target.closest(".tv");
+      if (!tv) return;
+      if (tv.dataset.special === "plus") {
+        ensureEdit(createProject);
+        return;
+      }
+      if (tv.dataset.special === "recap") {
+        openRecap();
+        return;
+      }
+      if (tv.dataset.id) openZoom(tv.dataset.id);
+    });
+
+    vp.addEventListener("pointermove", (e) => {
+      if (drag && drag.moved) {
+        $("#tooltip").hidden = true;
+        return;
+      }
+      const tv = e.target.closest(".tv[data-id]");
+      const tip = $("#tooltip");
+      if (!tv) {
+        tip.hidden = true;
+        return;
+      }
+      const p = getProject(tv.dataset.id);
+      if (!p) return;
+      const vs = visualState(p);
+      tip.hidden = false;
+      tip.innerHTML =
+        "<strong>" + esc(p.name) + "</strong>" +
+        '<div class="tt-line">' + esc(vs.label) + " · " + daysLabel(vs.days) + "</div>" +
+        '<div class="tt-line">' + esc(p.category || "미분류") + "</div>" +
+        (p.nextTodo ? '<div class="tt-line">다음 · ' + esc(p.nextTodo) + "</div>" : "");
+      tip.style.left = Math.min(window.innerWidth - 260, e.clientX + 14) + "px";
+      tip.style.top = Math.min(window.innerHeight - 120, e.clientY + 16) + "px";
+    });
+    vp.addEventListener("pointerleave", () => { $("#tooltip").hidden = true; });
+
+    $("#btn-zoom-in").addEventListener("click", () => {
+      camera.scale = Math.min(SCALE_MAX, camera.scale * 1.18);
+      applyCamera();
+    });
+    $("#btn-zoom-out").addEventListener("click", () => {
+      camera.scale = Math.max(SCALE_MIN, camera.scale / 1.18);
+      applyCamera();
+    });
+    $("#btn-home").addEventListener("click", () => centerOnLatest(true));
+
+    $("#minimap").addEventListener("click", (e) => {
+      const map = $("#minimap")._map;
+      if (!map) return;
+      const r = $("#minimap").getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      camera.cx = (x - map.ox) / map.scale;
+      camera.cy = (y - map.oy) / map.scale;
+      applyCamera();
+    });
+
+    $("#cat-tabs").addEventListener("click", (e) => {
+      const del = e.target.closest("[data-del]");
+      if (del && catsEditing && del.getAttribute("data-del") !== "__all") {
+        e.stopPropagation();
+        const name = del.getAttribute("data-del");
+        ensureEdit(() => {
+          state.categories = state.categories.filter((c) => c !== name);
+          if (activeCat === name) activeCat = "__all";
+          saveState();
+          renderCats();
+          renderWall();
+        });
+        return;
+      }
+      const chip = e.target.closest(".chip");
+      if (!chip) return;
+      activeCat = chip.getAttribute("data-cat");
+      renderCats();
+      renderWall();
+    });
+    $("#btn-add-cat").addEventListener("click", () => {
+      ensureEdit(() => {
+        $("#cat-name").value = "";
+        $("#cat-view").hidden = false;
+        setTimeout(() => $("#cat-name").focus(), 30);
+      });
+    });
+    $("#btn-edit-cats").addEventListener("click", () => {
+      ensureEdit(() => {
+        catsEditing = !catsEditing;
+        document.body.classList.toggle("cats-editing", catsEditing);
+        $("#btn-edit-cats").classList.toggle("is-on", catsEditing);
+      });
+    });
+    $("#cat-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const name = $("#cat-name").value.trim();
+      if (name && state.categories.indexOf(name) === -1) state.categories.push(name);
+      saveState();
+      $("#cat-view").hidden = true;
+      renderCats();
+    });
+
+    $("#search").addEventListener("input", renderSearch);
+    $("#search").addEventListener("keydown", (e) => {
+      const hits = $$(".search-hit");
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        searchIndex = Math.min(hits.length - 1, searchIndex + 1);
+        renderSearch();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        searchIndex = Math.max(0, searchIndex - 1);
+        renderSearch();
+      } else if (e.key === "Enter") {
+        const target = hits[searchIndex] || hits[0];
+        if (target) goToSearch(target.getAttribute("data-sid"));
+      } else if (e.key === "Escape") {
+        $("#search-results").hidden = true;
+        $("#search").blur();
+      }
+    });
+    $("#search-results").addEventListener("click", (e) => {
+      const hit = e.target.closest(".search-hit");
+      if (hit) goToSearch(hit.getAttribute("data-sid"));
+    });
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".search-box")) $("#search-results").hidden = true;
+      if (!e.target.closest("#btn-menu") && !e.target.closest("#menu-pop")) $("#menu-pop").hidden = true;
+      if (!e.target.closest("#btn-more-proj") && !e.target.closest("#proj-menu")) $("#proj-menu").hidden = true;
+    });
+
+    $("#btn-menu").addEventListener("click", (e) => {
+      e.stopPropagation();
+      $("#menu-pop").hidden = !$("#menu-pop").hidden;
+    });
+    $("#btn-reset").addEventListener("click", () => {
+      ensureEdit(() => {
+        previewEmpty = false;
+        state = clone(window.TV_SEED);
+        saveState();
+        pickRerun();
+        $("#menu-pop").hidden = true;
+        closeRecap();
+        if (currentId) closeZoom();
+        renderCats();
+        renderWall();
+        centerOnLatest(true);
+      });
+    });
+    $("#btn-empty-preview").addEventListener("click", () => {
+      previewEmpty = true;
+      $("#menu-pop").hidden = true;
+      closeRecap();
+      if (currentId) closeZoom();
+      renderWall();
+      centerOnLatest(false);
+    });
+
+    $("#btn-trash").addEventListener("click", () => {
+      renderTrash();
+      $("#trash-view").hidden = false;
+    });
+    $("#trash-body").addEventListener("click", (e) => {
+      const rest = e.target.closest("[data-restore]");
+      const purge = e.target.closest("[data-purge]");
+      if (rest) {
+        ensureEdit(() => {
+          const id = rest.getAttribute("data-restore");
+          const item = state.trash.find((t) => t.id === id);
+          if (!item) return;
+          state.trash = state.trash.filter((t) => t.id !== id);
+          applySizes();
+          const s = sizeFor((item.updates || []).length);
+          const pos = findEmpty(s.w, s.h);
+          item.x = pos.x;
+          item.y = pos.y;
+          delete item.deletedAt;
+          state.projects.push(item);
+          saveState();
+          renderTrash();
+          renderWall();
+        });
+      }
+      if (purge) {
+        ensureEdit(() => {
+          state.trash = state.trash.filter((t) => t.id !== purge.getAttribute("data-purge"));
+          saveState();
+          renderTrash();
+        });
+      }
+    });
+
+    $("#btn-back-wall").addEventListener("click", closeZoom);
+    $("#btn-recap-back").addEventListener("click", closeRecap);
+    $("#btn-onair").addEventListener("click", () => ensureEdit(openOnAir));
+    $("#btn-complete").addEventListener("click", () => {
+      ensureEdit(() => {
+        const p = getProject(currentId);
+        if (!p) return;
+        p.completed = !p.completed;
+        saveState();
+        renderZoom();
+      });
+    });
+    $("#btn-more-proj").addEventListener("click", (e) => {
+      e.stopPropagation();
+      $("#proj-menu").hidden = !$("#proj-menu").hidden;
+    });
+    $("#btn-rename").addEventListener("click", () => {
+      ensureEdit(() => {
+        const p = getProject(currentId);
+        if (!p) return;
+        const name = window.prompt("프로젝트 이름", p.name);
+        if (name != null && name.trim()) {
+          p.name = name.trim();
+          saveState();
+          renderZoom();
+        }
+        $("#proj-menu").hidden = true;
+      });
+    });
+    $("#btn-toggle-private").addEventListener("click", () => {
+      ensureEdit(() => {
+        const p = getProject(currentId);
+        if (!p) return;
+        p.private = !p.private;
+        saveState();
+        renderZoom();
+        $("#proj-menu").hidden = true;
+      });
+    });
+    $("#btn-delete-proj").addEventListener("click", () => {
+      ensureEdit(() => {
+        const p = getProject(currentId);
+        if (!p) return;
+        state.projects = state.projects.filter((x) => x.id !== p.id);
+        const copy = clone(p);
+        copy.deletedAt = fmtDay(today());
+        state.trash.push(copy);
+        saveState();
+        $("#proj-menu").hidden = true;
+        closeZoom();
+      });
+    });
+
+    $("#channel-tabs").addEventListener("click", (e) => {
+      if (e.target.id === "btn-add-ch") {
+        ensureEdit(() => {
+          const p = getProject(currentId);
+          if (!p) return;
+          const name = window.prompt("채널 이름", "");
+          if (!name || !name.trim()) return;
+          const ch = { id: uid("ch"), name: name.trim() };
+          p.channels.push(ch);
+          currentCh = ch.id;
+          saveState();
+          renderZoom();
+        });
+        return;
+      }
+      const tab = e.target.closest(".ch-tab[data-ch]");
+      if (!tab) return;
+      currentCh = tab.getAttribute("data-ch");
+      const p = getProject(currentId);
+      const first = channelUpdates(p, currentCh)[0];
+      currentUp = first ? first.id : null;
+      currentFile = 0;
+      renderZoom();
+    });
+    $("#vhs-row").addEventListener("click", (e) => {
+      const tape = e.target.closest(".vhs[data-up]");
+      if (!tape) return;
+      currentUp = tape.getAttribute("data-up");
+      currentFile = 0;
+      const p = getProject(currentId);
+      const u = currentUpdate(p);
+      if (u) currentCh = u.channelId;
+      renderZoom();
+    });
+    $("#file-slots").addEventListener("click", (e) => {
+      const slot = e.target.closest("[data-fi]");
+      if (!slot) return;
+      currentFile = Number(slot.getAttribute("data-fi"));
+      renderZoom();
+    });
+    $("#btn-prev-file").addEventListener("click", () => {
+      const p = getProject(currentId);
+      const u = currentUpdate(p);
+      const n = u && u.files ? u.files.length : 0;
+      if (n < 2) return;
+      currentFile = (currentFile + n - 1) % n;
+      renderZoom();
+    });
+    $("#btn-next-file").addEventListener("click", () => {
+      const p = getProject(currentId);
+      const u = currentUpdate(p);
+      const n = u && u.files ? u.files.length : 0;
+      if (n < 2) return;
+      currentFile = (currentFile + 1) % n;
+      renderZoom();
+    });
+    $("#btn-shelf").addEventListener("click", () => {
+      renderShelf();
+      $("#shelf-view").hidden = false;
+    });
+    $("#shelf-body").addEventListener("click", (e) => {
+      const tape = e.target.closest(".vhs[data-up]");
+      if (!tape) return;
+      currentUp = tape.getAttribute("data-up");
+      const p = getProject(currentId);
+      const u = currentUpdate(p);
+      if (u) currentCh = u.channelId;
+      currentFile = 0;
+      $("#shelf-view").hidden = true;
+      renderZoom();
+    });
+
+    $("#onair-form").addEventListener("submit", submitOnAir);
+    $("#oa-moods").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-mood]");
+      if (!b) return;
+      oaMood = b.getAttribute("data-mood");
+      $$("#oa-moods button").forEach((x) => x.classList.toggle("is-on", x === b));
+    });
+    const drop = $("#oa-drop");
+    drop.addEventListener("click", () => $("#oa-files").click());
+    $("#oa-files").addEventListener("change", (e) => readFiles(e.target.files));
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("is-drag"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("is-drag"));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      drop.classList.remove("is-drag");
+      readFiles(e.dataTransfer.files);
+    });
+
+    $$("[data-close]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const which = el.getAttribute("data-close");
+        if (which === "onair") closeOnAir();
+        if (which === "pass") closePass();
+        if (which === "shelf") $("#shelf-view").hidden = true;
+        if (which === "trash") $("#trash-view").hidden = true;
+        if (which === "cat") $("#cat-view").hidden = true;
+      });
+    });
+
+    $("#pass-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      if ($("#pass-input").value === PASSWORD) {
+        unlocked = true;
+        localStorage.setItem(AUTH_KEY, "1");
+        $("#pass-view").hidden = true;
+        const fn = pendingEdit;
+        pendingEdit = null;
+        renderWall();
+        if (currentId) renderZoom();
+        if (fn) fn();
+      } else {
+        $("#pass-err").hidden = false;
+      }
+    });
+
+    $("#recap-tabs").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-period]");
+      if (!b) return;
+      recapPeriod = b.getAttribute("data-period");
+      $$("#recap-tabs button").forEach((x) => x.classList.toggle("is-on", x === b));
+      renderRecap();
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if (!$("#pass-view").hidden) return closePass();
+      if (!$("#onair-view").hidden) return closeOnAir();
+      if (!$("#shelf-view").hidden) return ($("#shelf-view").hidden = true);
+      if (!$("#trash-view").hidden) return ($("#trash-view").hidden = true);
+      if (!$("#cat-view").hidden) return ($("#cat-view").hidden = true);
+      if (!$("#recap-view").hidden) return closeRecap();
+      if (!$("#zoom-view").hidden) return closeZoom();
+    });
+
+    window.addEventListener("resize", applyCamera);
+  }
+
+  function startAmbience() {
+    setInterval(() => {
+      if (!$("#zoom-view").hidden) return;
+      const tvs = $$("#wall .tv[data-id]");
+      if (!tvs.length) return;
+      const el = tvs[Math.floor(Math.random() * tvs.length)];
+      el.classList.add("is-glitch");
+      setTimeout(() => el.classList.remove("is-glitch"), 280);
+    }, 9000);
+    setInterval(() => {
+      $$(".tv-mood-face").forEach((n) => n.remove());
+      if (!$("#zoom-view").hidden) return;
+      const cands = projects().filter((p) => !(p.private && !unlocked) && latestMood(p));
+      if (!cands.length) return;
+      const p = cands[Math.floor(Math.random() * cands.length)];
+      const el = $('#wall .tv[data-id="' + p.id + '"]');
+      if (!el) return;
+      const face = document.createElement("div");
+      face.className = "tv-mood-face";
+      face.textContent = latestMood(p);
+      $(".tv-screen", el).appendChild(face);
+      setTimeout(() => face.remove(), 3200);
+    }, 15000);
+  }
+
+  window.TVArchive = {
+    unlock: function () {
+      unlocked = true;
+      localStorage.setItem(AUTH_KEY, "1");
     },
-    openUpdate: openUpdateModal,
-    setCatsEditing(v) {
-      catsEditing = !!v;
-      renderAll();
+    openProject: function (id) { openZoom(id); },
+    openRecap: openRecap,
+    openOnAir: function () {
+      if (!currentId) openZoom("p-poster");
+      unlocked = true;
+      openOnAir();
     },
-    openAddCat() {
-      $("#fc-name").value = "";
-      openModal("#modal-cat");
+    showEmpty: function () {
+      previewEmpty = true;
+      closeRecap();
+      if (currentId) closeZoom();
+      renderWall();
+      centerOnLatest(false);
     },
-    state: () => state,
+    reset: function () {
+      previewEmpty = false;
+      state = clone(window.TV_SEED);
+      saveState();
+      pickRerun();
+      renderCats();
+      renderWall();
+      centerOnLatest(false);
+    },
   };
 
-  renderAll();
+  function init() {
+    unlocked = localStorage.getItem(AUTH_KEY) === "1";
+    loadState();
+    purgeTrash();
+    pickRerun();
+    document.body.classList.add("on-wall");
+    bindEvents();
+    renderCats();
+    renderWall();
+    centerOnLatest(false);
+    startAmbience();
+  }
+
+  init();
 })();
