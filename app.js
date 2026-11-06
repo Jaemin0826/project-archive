@@ -4,7 +4,7 @@
 
   const CELL_W = 236;
   const CELL_H = 164;
-  const GAP = 16;
+  const GAP = 8;
   const GRID_MIN = -8;
   const SCALE_MIN = 0.38;
   const SCALE_MAX = 1.75;
@@ -263,6 +263,151 @@
     const beforeH = p.h || 1;
     applySizes();
     if (p.w !== beforeW || p.h !== beforeH) resolveCollisions(p, "right", 0);
+  }
+
+  function reducedMotion() {
+    try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (err) { return false; }
+  }
+
+  function snapCellFromPixels(tlx, tly) {
+    return {
+      x: Math.round(tlx / CELL_W + GRID_MIN),
+      y: Math.round(tly / CELL_H + GRID_MIN),
+    };
+  }
+
+  function simulateMove(p, nx, ny) {
+    const dirX = nx - p.x;
+    const dirY = ny - p.y;
+    const dir = Math.abs(dirX) >= Math.abs(dirY) ? (dirX < 0 ? "left" : "right") : (dirY < 0 ? "up" : "down");
+    const others = projects()
+      .filter(function (o) { return o.id !== p.id; })
+      .map(function (o) { return { id: o.id, x: o.x, y: o.y, w: o.w, h: o.h }; });
+    const moved = { id: p.id, x: nx, y: ny, w: p.w, h: p.h };
+    const rec = { x: state.recap.x, y: state.recap.y, w: 1, h: 1 };
+    function resolve(m, d, depth) {
+      if (depth > 14) return;
+      others.forEach(function (o) {
+        if (!rectsOverlap(m, o)) return;
+        if (d === "left") o.x = m.x - o.w;
+        else if (d === "up") o.y = m.y - o.h;
+        else if (d === "down") o.y = m.y + m.h;
+        else o.x = m.x + m.w;
+        resolve(o, d, depth + 1);
+      });
+      if (rectsOverlap(m, rec)) {
+        if (d === "left") rec.x = m.x - 1;
+        else if (d === "up") rec.y = m.y - 1;
+        else if (d === "down") rec.y = m.y + m.h;
+        else rec.x = m.x + m.w;
+      }
+    }
+    resolve(moved, dir, 0);
+    return { nx: moved.x, ny: moved.y, others: others, rec: rec, dir: dir };
+  }
+
+  function applyDragPreview(p, nx, ny) {
+    const wall = $("#wall");
+    if (!wall || !p) return;
+    let slot = $(".tv-drop-slot", wall);
+    const loc = cellToLocal(nx, ny);
+    const w = p.w * CELL_W - GAP;
+    const h = p.h * CELL_H - GAP;
+    if (!slot) {
+      slot = document.createElement("div");
+      slot.className = "tv-drop-slot" + (p.sizeKey === "2x2" || p.sizeKey === "3x3" ? " is-large" : "");
+      slot.style.left = loc.x + "px";
+      slot.style.top = loc.y + "px";
+      slot.style.width = w + "px";
+      slot.style.height = h + "px";
+      wall.insertBefore(slot, wall.firstChild);
+      requestAnimationFrame(function () { slot.classList.add("is-live"); });
+    } else {
+      slot.style.left = loc.x + "px";
+      slot.style.top = loc.y + "px";
+      slot.style.width = w + "px";
+      slot.style.height = h + "px";
+    }
+    const sim = simulateMove(p, nx, ny);
+    const seen = {};
+    sim.others.forEach(function (o) {
+      seen[o.id] = true;
+      const el = $('#wall .tv[data-id="' + o.id + '"]');
+      if (!el) return;
+      const orig = getProject(o.id);
+      const moved = orig && (orig.x !== o.x || orig.y !== o.y);
+      el.classList.toggle("is-previewing", !!moved);
+      const pos = cellToLocal(o.x, o.y);
+      el.style.left = pos.x + "px";
+      el.style.top = pos.y + "px";
+    });
+    projects().forEach(function (o) {
+      if (o.id === p.id || seen[o.id]) return;
+      const el = $('#wall .tv[data-id="' + o.id + '"]');
+      if (!el) return;
+      el.classList.remove("is-previewing");
+      const pos = cellToLocal(o.x, o.y);
+      el.style.left = pos.x + "px";
+      el.style.top = pos.y + "px";
+    });
+    const recEl = $('#wall .tv[data-special="recap"]');
+    if (recEl) {
+      const movedRec = sim.rec.x !== state.recap.x || sim.rec.y !== state.recap.y;
+      recEl.classList.toggle("is-previewing", movedRec);
+      const pos = cellToLocal(sim.rec.x, sim.rec.y);
+      recEl.style.left = pos.x + "px";
+      recEl.style.top = pos.y + "px";
+    }
+  }
+
+  function clearDragPreview() {
+    const slot = $("#wall .tv-drop-slot");
+    if (slot) slot.remove();
+    $$("#wall .tv.is-previewing").forEach(function (el) { el.classList.remove("is-previewing"); });
+  }
+
+  let hoverRippleTv = null;
+  let hoverPulseTimer = null;
+
+  function spawnRipple(tv) {
+    if (!tv || reducedMotion()) return;
+    const wall = $("#wall");
+    if (!wall) return;
+    const cx = tv.offsetLeft + tv.offsetWidth / 2;
+    const cy = tv.offsetTop + tv.offsetHeight / 2;
+    const rip = document.createElement("div");
+    rip.className = "tv-ripple";
+    rip.style.left = cx + "px";
+    rip.style.top = cy + "px";
+    rip.style.setProperty("--ripple-w", tv.offsetWidth + "px");
+    rip.style.setProperty("--ripple-h", tv.offsetHeight + "px");
+    rip.innerHTML = "<i></i><i></i>";
+    wall.insertBefore(rip, wall.firstChild);
+    setTimeout(function () { if (rip.parentNode) rip.remove(); }, 900);
+  }
+
+  function beginTvHover(tv) {
+    if (!tv || hoverRippleTv === tv || (drag && drag.moved)) return;
+    if (hoverRippleTv && hoverRippleTv !== tv) endTvHover(hoverRippleTv);
+    hoverRippleTv = tv;
+    tv.classList.add("is-hover");
+    spawnRipple(tv);
+    clearInterval(hoverPulseTimer);
+    if (!reducedMotion()) {
+      hoverPulseTimer = setInterval(function () {
+        if (hoverRippleTv === tv && !(drag && drag.moved)) spawnRipple(tv);
+        else clearInterval(hoverPulseTimer);
+      }, 2600);
+    }
+  }
+
+  function endTvHover(tv) {
+    if (tv) tv.classList.remove("is-hover");
+    if (!tv || hoverRippleTv === tv) {
+      hoverRippleTv = null;
+      clearInterval(hoverPulseTimer);
+      hoverPulseTimer = null;
+    }
   }
 
   /* —— camera —— */
@@ -1428,20 +1573,16 @@
     vp.addEventListener("wheel", (e) => {
       if (!$("#zoom-view").hidden || !$("#recap-view").hidden) return;
       e.preventDefault();
-      if (e.ctrlKey || e.metaKey) {
-        const factor = Math.exp(-e.deltaY * 0.0015);
-        const next = Math.min(SCALE_MAX, Math.max(SCALE_MIN, camera.scale * factor));
-        const world = worldFromEvent(e);
-        const k = next / camera.scale;
-        camera.cx = world.x - (world.x - camera.cx) * k;
-        camera.cy = world.y - (world.y - camera.cy) * k;
-        camera.scale = next;
-        applyCamera();
-      } else {
-        camera.cx += e.deltaX / camera.scale;
-        camera.cy += e.deltaY / camera.scale;
-        applyCamera();
-      }
+      const dy = e.deltaY || (e.deltaX ? e.deltaX : 0);
+      const factor = Math.exp(-dy * 0.0015);
+      const next = Math.min(SCALE_MAX, Math.max(SCALE_MIN, camera.scale * factor));
+      if (next === camera.scale) return;
+      const world = worldFromEvent(e);
+      const k = next / camera.scale;
+      camera.cx = world.x - (world.x - camera.cx) * k;
+      camera.cy = world.y - (world.y - camera.cy) * k;
+      camera.scale = next;
+      applyCamera();
     }, { passive: false });
 
     vp.addEventListener("pointerdown", (e) => {
@@ -1481,8 +1622,10 @@
           }
           drag.moved = true;
           skipClick = true;
+          endTvHover(hoverRippleTv);
           const el = $('#wall .tv[data-id="' + drag.id + '"]');
           if (el) el.classList.add("is-dragging");
+          try { vp.setPointerCapture(e.pointerId); } catch (err) {}
         }
         if (drag && drag.moved) {
           const world = worldFromEvent(e);
@@ -1490,6 +1633,14 @@
           if (el) {
             el.style.left = world.x - drag.ox + "px";
             el.style.top = world.y - drag.oy + "px";
+          }
+          const p = getProject(drag.id);
+          if (p) {
+            const snap = snapCellFromPixels(world.x - drag.ox, world.y - drag.oy);
+            if (!drag.snap || drag.snap.x !== snap.x || drag.snap.y !== snap.y) {
+              drag.snap = snap;
+              applyDragPreview(p, snap.x, snap.y);
+            }
           }
         }
         return;
@@ -1512,6 +1663,7 @@
           const p = getProject(info.id);
           const el = $('#wall .tv[data-id="' + info.id + '"]');
           if (el) el.classList.remove("is-dragging");
+          clearDragPreview();
           if (p) {
             const world = worldFromEvent(e);
             const tlx = world.x - info.ox;
@@ -1534,6 +1686,20 @@
     }
     vp.addEventListener("pointerup", endPointer);
     vp.addEventListener("pointercancel", endPointer);
+
+    vp.addEventListener("pointerover", (e) => {
+      if (drag && drag.moved) return;
+      const tv = e.target.closest("#wall .tv");
+      if (!tv) return;
+      if (e.relatedTarget && tv.contains(e.relatedTarget)) return;
+      beginTvHover(tv);
+    });
+    vp.addEventListener("pointerout", (e) => {
+      const tv = e.target.closest("#wall .tv");
+      if (!tv) return;
+      if (e.relatedTarget && tv.contains(e.relatedTarget)) return;
+      endTvHover(tv);
+    });
 
     vp.addEventListener("click", (e) => {
       if (skipClick) return;
@@ -2098,6 +2264,25 @@
     },
     setSideMode: setSideMode,
     collapseSidebar: applySidebarCollapsed,
+    spawnRipple: spawnRipple,
+    previewHover: function (id) {
+      const el = $('#wall .tv[data-id="' + id + '"]') || $("#wall .tv");
+      if (!el) return;
+      beginTvHover(el);
+    },
+    previewDrag: function (id, nx, ny) {
+      const p = getProject(id);
+      const el = $('#wall .tv[data-id="' + id + '"]');
+      if (!p || !el) return;
+      unlocked = true;
+      endTvHover(el);
+      el.classList.add("is-dragging");
+      const snap = { x: nx != null ? nx : p.x + 1, y: ny != null ? ny : p.y };
+      const world = cellToLocal(snap.x + 0.18, snap.y + 0.12);
+      el.style.left = world.x + "px";
+      el.style.top = world.y + "px";
+      applyDragPreview(p, snap.x, snap.y);
+    },
   };
 
   function init() {
