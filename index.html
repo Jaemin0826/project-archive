@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>프로젝트 아카이브</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">◈</span>
+        <span class="brand-name">아카이브</span>
+      </div>
+      <div class="search-wrap">
+        <svg class="search-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="search" type="search" placeholder="프로젝트 · 파트 · 업데이트 검색" autocomplete="off" />
+      </div>
+    </header>
+
+    <div class="cats-row">
+      <div id="cat-tabs" class="cat-tabs" role="tablist"></div>
+      <button id="btn-add-cat" class="btn-icon" type="button" title="카테고리 추가">+</button>
+      <button id="btn-edit-cats" class="btn-text" type="button">편집</button>
+    </div>
+
+    <div class="workspace">
+      <section class="grid-pane">
+        <div id="project-grid" class="project-grid"></div>
+      </section>
+
+      <aside id="detail-pane" class="detail-pane">
+        <div id="detail-empty" class="detail-empty">
+          <div class="empty-ico">⬚</div>
+          <p>프로젝트를 선택하세요</p>
+          <span>카드를 클릭하면 파트와 업데이트 타임라인이 여기에 열려요.</span>
+        </div>
+        <div id="detail-body" class="detail-body hidden"></div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Modal: add update -->
+  <div id="modal-update" class="modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="mu-title">
+      <header class="modal-head">
+        <h2 id="mu-title">업데이트 추가</h2>
+        <button class="btn-icon" type="button" data-close aria-label="닫기">×</button>
+      </header>
+      <form id="form-update" class="modal-form">
+        <label>
+          <span>파트</span>
+          <select id="fu-part" required></select>
+        </label>
+        <label>
+          <span>제목</span>
+          <input id="fu-title" type="text" placeholder="짧은 제목" required maxlength="80" />
+        </label>
+        <label>
+          <span>상세 메모</span>
+          <textarea id="fu-detail" rows="4" placeholder="진행 내용, 메모…"></textarea>
+        </label>
+        <label>
+          <span>미디어 타입</span>
+          <select id="fu-media-type">
+            <option value="image">이미지</option>
+            <option value="video">영상</option>
+            <option value="model3d">3D</option>
+            <option value="none">없음</option>
+          </select>
+        </label>
+        <div class="dropzone" id="fu-drop">
+          <p>파일을 끌어다 놓거나 클릭해서 선택</p>
+          <span class="muted">이미지 · 영상 · 3D 모델 (목업 — 실제 업로드 없음)</span>
+          <input type="file" id="fu-file" hidden />
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-close>취소</button>
+          <button type="submit" class="btn-primary">추가</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: new project -->
+  <div id="modal-project" class="modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <header class="modal-head">
+        <h2>새 프로젝트</h2>
+        <button class="btn-icon" type="button" data-close aria-label="닫기">×</button>
+      </header>
+      <form id="form-project" class="modal-form">
+        <label>
+          <span>이름</span>
+          <input id="fp-name" type="text" required maxlength="60" placeholder="프로젝트 이름" />
+        </label>
+        <label>
+          <span>카테고리</span>
+          <select id="fp-cat" required></select>
+        </label>
+        <label>
+          <span>상태</span>
+          <select id="fp-status">
+            <option value="진행 중">진행 중</option>
+            <option value="보류">보류</option>
+            <option value="완료">완료</option>
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-close>취소</button>
+          <button type="submit" class="btn-primary">만들기</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: add category -->
+  <div id="modal-cat" class="modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card modal-sm" role="dialog" aria-modal="true">
+      <header class="modal-head">
+        <h2>카테고리 추가</h2>
+        <button class="btn-icon" type="button" data-close aria-label="닫기">×</button>
+      </header>
+      <form id="form-cat" class="modal-form">
+        <label>
+          <span>이름</span>
+          <input id="fc-name" type="text" required maxlength="24" placeholder="예: 게임, 브랜딩" />
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-close>취소</button>
+          <button type="submit" class="btn-primary">추가</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: add part -->
+  <div id="modal-part" class="modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card modal-sm" role="dialog" aria-modal="true">
+      <header class="modal-head">
+        <h2>파트 추가</h2>
+        <button class="btn-icon" type="button" data-close aria-label="닫기">×</button>
+      </header>
+      <form id="form-part" class="modal-form">
+        <label>
+          <span>파트 이름</span>
+          <input id="fpart-name" type="text" required maxlength="30" placeholder="예: 일러스트, 배경, UI" />
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-close>취소</button>
+          <button type="submit" class="btn-primary">추가</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
