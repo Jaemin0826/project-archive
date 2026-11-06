@@ -1,7 +1,5 @@
 /* TV Archive seed — dates relative to 2026-11-07 */
 (function () {
-  const img = (n) => `images/th-${String(n).padStart(2, "0")}.jpg`;
-
   function u(id, channelId, date, title, description, mood, files, extra) {
     return Object.assign(
       {
@@ -20,7 +18,7 @@
   }
 
   function file(type, n, name) {
-    return { type, src: img(n), name: name || "" };
+    return { type: type, src: "", name: name || (typeof n === "string" ? n : "") };
   }
 
   const mintexChannels = [

@@ -118,12 +118,14 @@ input, select, textarea { background: transparent; }
   color: #e8e8e8;
 }
 .search-hit:hover, .search-hit.is-active { background: #333; }
-.search-hit img {
+.search-hit img, .search-hit .sh-ph {
   width: 48px; height: 32px;
   object-fit: cover;
   border-radius: 5px;
-  background: #111;
+  background: #191919;
   border: 1px solid #3a3a3a;
+  flex-shrink: 0;
+  display: block;
 }
 .search-hit .sh-name { font-size: 14px; font-weight: 600; }
 .search-hit .sh-status { font-size: 12px; color: #8a8a8a; margin-top: 2px; }
@@ -420,7 +422,7 @@ body.cats-editing .chip:not([data-cat="__all"]) .cat-x { display: inline-flex; }
 }
 .tv-nosignal {
   position: absolute; inset: 0;
-  background: #1c222b;
+  background: #191919;
   display: flex; align-items: center; justify-content: center;
 }
 .tv-nosignal span {
@@ -830,7 +832,7 @@ body:not(.on-wall) .hud-br { display: none; }
   white-space: nowrap;
 }
 .vhs.is-on { outline: 2px solid #ddd; transform: translateY(-2px); }
-.vhs.is-priv .vhs-label { background: #b0b8c4; }
+.vhs.is-priv .vhs-label { background: #b8b8b8; }
 
 .file-slots { display: flex; gap: 6px; }
 .fslot {
@@ -843,7 +845,7 @@ body:not(.on-wall) .hud-br { display: none; }
 }
 .fslot img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .fslot.is-on { border-color: #ccc; }
-.fslot.model, .fslot.video {
+.fslot.model3d, .fslot.video, .fslot.model {
   display: flex; align-items: center; justify-content: center;
   font-size: 11px; color: #aaa;
 }
@@ -991,13 +993,13 @@ body:not(.on-wall) .hud-br { display: none; }
   gap: 10px;
 }
 .recap-thumbs figure { margin: 0; }
-.recap-thumbs img {
+.recap-thumbs img, .recap-thumbs .recap-ph {
   width: 100%; aspect-ratio: 16/10;
   object-fit: cover;
   border-radius: 8px;
   border: 1px solid #333;
   display: block;
-  background: #111;
+  background: #191919;
 }
 .recap-thumbs figcaption {
   font-size: 12px;
@@ -1026,11 +1028,14 @@ body:not(.on-wall) .hud-br { display: none; }
   padding: 10px 0;
   border-bottom: 1px solid #2e2e2e;
 }
-.trash-item img {
+.trash-item img, .trash-item .ti-ph {
   width: 72px; height: 48px;
   object-fit: cover;
   border-radius: 6px;
-  background: #111;
+  background: #191919;
+  border: 1px solid #333;
+  display: block;
+  flex-shrink: 0;
 }
 .trash-item .ti-name { font-weight: 650; font-size: 15px; }
 .trash-item .ti-days { font-size: 13px; color: #8a8a8a; }

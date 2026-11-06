@@ -10,7 +10,7 @@
   const SCALE_MAX = 1.75;
   const DEFAULT_SCALE = 1;
   const AUTH_KEY = "tv-archive-unlocked";
-  const DATA_KEY = "tv-archive-data-v2";
+  const DATA_KEY = "tv-archive-data-v3";
   const PASSWORD = "0000";
   const MOODS = ["😊", "😐", "😵", "🔥", "✨", "😢"];
   const MOOD_VAL = { "😢": 1, "😵": 2, "😐": 3, "😊": 4, "✨": 5, "🔥": 5 };
@@ -606,7 +606,7 @@
     const w = el.clientWidth || 640;
     const h = el.clientHeight || 360;
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111116);
+    scene.background = new THREE.Color(0x191919);
     const cam = new THREE.PerspectiveCamera(50, w / h, 0.1, 100);
     cam.position.set(0, 0.55, 3.2);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -619,7 +619,7 @@
     scene.add(dir);
     const cube = new THREE.Mesh(
       new THREE.BoxGeometry(1.15, 1.15, 1.15),
-      new THREE.MeshStandardMaterial({ color: 0x7a6cff, metalness: 0.22, roughness: 0.38 })
+      new THREE.MeshStandardMaterial({ color: 0x8a8a8a, metalness: 0.18, roughness: 0.42 })
     );
     scene.add(cube);
     let spinning = false, lx = 0, ly = 0, mx = 0.4, my = 0.25, dist = 3.2;
@@ -783,8 +783,11 @@
     } else {
       slots.innerHTML = files
         .map((f, i) => {
-          if (f.type === "image") {
+          if (f.type === "image" && f.src) {
             return '<button type="button" class="fslot' + (i === currentFile ? " is-on" : "") + '" data-fi="' + i + '"><img alt="" src="' + esc(f.src) + '" /></button>';
+          }
+          if (f.type === "image") {
+            return '<button type="button" class="fslot' + (i === currentFile ? " is-on" : "") + '" data-fi="' + i + '"></button>';
           }
           return '<button type="button" class="fslot ' + esc(f.type) + (i === currentFile ? " is-on" : "") + '" data-fi="' + i + '">' + (f.type === "model3d" ? "3D" : "영상") + "</button>";
         })
@@ -877,7 +880,7 @@
     const points = rec.items.slice().reverse();
     const w = 680, h = 180, pad = 28;
     let chart = '<svg class="mood-chart" viewBox="0 0 ' + w + " " + h + '" preserveAspectRatio="none">';
-    chart += '<line x1="' + pad + '" y1="' + (h - pad) + '" x2="' + (w - 10) + '" y2="' + (h - pad) + '" stroke="#2a2a2e"/>';
+    chart += '<line x1="' + pad + '" y1="' + (h - pad) + '" x2="' + (w - 10) + '" y2="' + (h - pad) + '" stroke="#2a2a2a"/>';
     if (points.length) {
       const coords = points.map((it, i) => {
         const x = pad + (points.length === 1 ? (w - pad - 10) / 2 : (i / (points.length - 1)) * (w - pad - 20));
@@ -888,7 +891,7 @@
       const d = coords.map((c, i) => (i ? "L" : "M") + c.x.toFixed(1) + " " + c.y.toFixed(1)).join(" ");
       chart += '<path d="' + d + '" fill="none" stroke="#b0b0b0" stroke-width="2"/>';
       coords.forEach((c) => {
-        chart += '<circle cx="' + c.x + '" cy="' + c.y + '" r="4" fill="#1a1a1c" stroke="#b0b0b0"/>';
+        chart += '<circle cx="' + c.x + '" cy="' + c.y + '" r="4" fill="#1a1a1a" stroke="#b0b0b0"/>';
         chart += '<text x="' + c.x + '" y="' + (c.y - 10) + '" text-anchor="middle" font-size="12">' + c.mood + "</text>";
       });
     }
@@ -917,7 +920,7 @@
       .map((it) => {
         const img = it.src
           ? '<img alt="" src="' + esc(it.src) + '" />'
-          : '<img alt="" />';
+          : '<div class="recap-ph"></div>';
         return "<figure>" + img + "<figcaption>" + esc(it.update.date.slice(5)) + " · " + esc(it.update.title) + "</figcaption></figure>";
       })
       .join("") || '<p class="zm-sub">이 기간의 방송이 없어.</p>';
@@ -1086,7 +1089,7 @@
         const src = coverOf(it.p);
         const img = src && !(it.p.private && !unlocked)
           ? '<img alt="" src="' + esc(src) + '" />'
-          : '<img alt="" />';
+          : '<span class="sh-ph"></span>';
         return (
           '<li><button type="button" class="search-hit' + (i === searchIndex ? " is-active" : "") + '" data-sid="' + esc(it.p.id) + '">' +
           img + "<div><div class=\"sh-name\">" + esc(it.p.name) + "</div>" +
@@ -1121,7 +1124,7 @@
         const src = coverOf(p);
         return (
           '<div class="trash-item" data-tid="' + esc(p.id) + '">' +
-          (src ? '<img alt="" src="' + esc(src) + '" />' : '<img alt="" />') +
+          (src ? '<img alt="" src="' + esc(src) + '" />' : '<span class="ti-ph"></span>') +
           "<div><div class=\"ti-name\">" + esc(p.name) + "</div>" +
           '<div class="ti-days">' + left + "일 뒤 사라짐</div></div>" +
           '<div class="ti-acts"><button type="button" class="hud-btn" data-restore="' + esc(p.id) + '">되돌리기</button>' +
