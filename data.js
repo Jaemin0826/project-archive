@@ -68,17 +68,17 @@
   );
 
   window.TV_SEED = {
-    categories: ["게임", "브랜딩", "일러스트", "UI/UX", "모션"],
-    recap: { x: 6, y: 0 },
+    categories: ["이미지", "영상", "3D", "사갈"],
+    recap: { x: 5, y: 0 },
     projects: [
       {
         id: "p-star",
         name: "별빛 탐험대",
-        category: "게임",
+        category: "사갈",
         completed: false,
         private: false,
         nextTodo: "주인공 표정 시트 2차 채색",
-        x: 3,
+        x: 6,
         y: 0,
         channels: [
           { id: "pt-illust", name: "일러스트" },
@@ -110,12 +110,12 @@
       {
         id: "p-poster",
         name: "캠퍼스 페스티벌 포스터",
-        category: "일러스트",
+        category: "이미지",
         completed: false,
         private: false,
         nextTodo: "인쇄용 PDF 보내기",
         x: 3,
-        y: 2,
+        y: 0,
         channels: [{ id: "pp1", name: "메인 비주얼" }],
         updates: [
           u("po1", "pp1", "2026-11-07", "인쇄 가이드 정리", "여백 3mm, 야간 톤 유지.", "😊", [
@@ -129,11 +129,11 @@
       {
         id: "p-banner",
         name: "시즌 배너 시리즈",
-        category: "브랜딩",
+        category: "이미지",
         completed: false,
         private: false,
         nextTodo: "겨울 배너 눈 파티클",
-        x: 5,
+        x: 4,
         y: 0,
         channels: [
           { id: "pbn1", name: "가을" },
@@ -147,12 +147,12 @@
       {
         id: "p-tracker",
         name: "습관 트래커 앱 UI",
-        category: "UI/UX",
+        category: "이미지",
         completed: false,
         private: false,
         nextTodo: "통계 차트 인터랙션",
-        x: 4,
-        y: 2,
+        x: 3,
+        y: 1,
         channels: [
           { id: "pa1", name: "온보딩" },
           { id: "pa2", name: "홈" },
@@ -171,11 +171,11 @@
       {
         id: "p-luna",
         name: "캐릭터 시트 — 루나",
-        category: "일러스트",
+        category: "이미지",
         completed: false,
         private: false,
         nextTodo: "의상 뒷모습 추가",
-        x: 5,
+        x: 1,
         y: 1,
         channels: [
           { id: "pc1", name: "얼굴" },
@@ -190,11 +190,11 @@
       {
         id: "p-light",
         name: "로비 씬 라이팅",
-        category: "게임",
+        category: "3D",
         completed: false,
         private: false,
         nextTodo: "노출값 맞추기",
-        x: 6,
+        x: 2,
         y: 1,
         channels: [
           { id: "p3a", name: "모델링" },
@@ -210,24 +210,24 @@
       {
         id: "p-mintex",
         name: "미니텍스코어",
-        category: "UI/UX",
+        category: "사갈",
         completed: false,
         private: false,
         nextTodo: "고객 인터뷰 노트 반영",
         x: 0,
-        y: 0,
+        y: 2,
         channels: mintexChannels,
         updates: mintexUpdates,
       },
       {
         id: "p-cafe",
         name: "카페 로고 리뉴얼",
-        category: "브랜딩",
+        category: "이미지",
         completed: true,
         private: false,
         nextTodo: "",
         x: 0,
-        y: 3,
+        y: 0,
         channels: [
           { id: "pb1", name: "로고" },
           { id: "pb2", name: "패키지" },
@@ -242,12 +242,12 @@
       {
         id: "p-secret",
         name: "비밀 작업실",
-        category: "일러스트",
+        category: "이미지",
         completed: false,
         private: true,
         nextTodo: "시안 정리해서 보내기",
-        x: 6,
-        y: 2,
+        x: 5,
+        y: 1,
         channels: [{ id: "ps1", name: "시안" }],
         updates: [
           u("se1", "ps1", "2026-11-05", "비공개 시안 2차", "아직 외부에 나가면 안 되는 컷.", "😊", [file("image", 14, "시안 2차")], {
@@ -261,12 +261,12 @@
       {
         id: "p-motion",
         name: "브랜드 오프닝 모션",
-        category: "모션",
+        category: "영상",
         completed: false,
         private: false,
         nextTodo: "클라이언트 피드백 반영",
-        x: 3,
-        y: 3,
+        x: 0,
+        y: 1,
         channels: [{ id: "pm1", name: "메인 시퀀스" }],
         updates: [
           u("mo1", "pm1", "2026-09-10", "러프 애니 15초", "클라이언트 피드백 대기 중.", "😢", [
@@ -278,12 +278,12 @@
       {
         id: "p-folio",
         name: "포트폴리오 리뉴얼",
-        category: "UI/UX",
+        category: "이미지",
         completed: false,
         private: false,
         nextTodo: "그리드 다시 잡기",
         x: 1,
-        y: 3,
+        y: 0,
         channels: [{ id: "pw1", name: "레이아웃" }],
         updates: [
           u("fo1", "pw1", "2026-06-20", "그리드 실험 중단", "다른 프로젝트 우선.", "😵", [file("image", 9, "그리드")]),
@@ -293,12 +293,12 @@
       {
         id: "p-icons",
         name: "앱 아이콘 세트",
-        category: "UI/UX",
+        category: "이미지",
         completed: false,
         private: false,
         nextTodo: "24px 라인 두께 재검토",
         x: 2,
-        y: 3,
+        y: 0,
         channels: [{ id: "pi1", name: "24px 세트" }],
         updates: [
           u("ic1", "pi1", "2026-07-01", "48개 아이콘 초안", "아웃라인 / 필 2스타일.", "😐", [file("image", 10, "아이콘")]),

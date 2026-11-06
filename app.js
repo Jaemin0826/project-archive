@@ -2,14 +2,15 @@
 (function () {
   "use strict";
 
-  const CELL = 210;
-  const GAP = 18;
+  const CELL_W = 236;
+  const CELL_H = 164;
+  const GAP = 16;
   const GRID_MIN = -8;
   const SCALE_MIN = 0.38;
   const SCALE_MAX = 1.75;
-  const DEFAULT_SCALE = 0.7;
+  const DEFAULT_SCALE = 1;
   const AUTH_KEY = "tv-archive-unlocked";
-  const DATA_KEY = "tv-archive-data";
+  const DATA_KEY = "tv-archive-data-v2";
   const PASSWORD = "0000";
   const MOODS = ["😊", "😐", "😵", "🔥", "✨", "😢"];
   const MOOD_VAL = { "😢": 1, "😵": 2, "😐": 3, "😊": 4, "✨": 5, "🔥": 5 };
@@ -109,17 +110,17 @@
 
   function visualState(p) {
     if (p.private && !unlocked) {
-      return { key: "nosignal", badge: "NO SIGNAL", label: "비공개", days: daysBetween(lastDate(p)) };
+      return { key: "nosignal", badge: "OFFLINE", label: "비공개", days: daysBetween(lastDate(p)), dot: "gray" };
     }
     if (p.completed) {
       return { key: "ended", badge: "방송 종료", label: "방송 종료", days: daysBetween(lastDate(p)) };
     }
     const d = daysBetween(lastDate(p));
-    if (d <= 3) return { key: "onair", badge: "ON AIR", label: "방송 중", days: d, dot: true };
-    if (d <= 14) return { key: "on", badge: "ON", label: "켜져 있음", days: d };
-    if (d <= 30) return { key: "static", badge: "STATIC", label: "지지직", days: d };
-    if (d <= 90) return { key: "night", badge: "NIGHT", label: "혼자 켜진 밤", days: d };
-    return { key: "offline", badge: "OFFLINE", label: "꺼짐", days: d };
+    if (d <= 3) return { key: "onair", badge: "ON AIR", label: "방송 중", days: d, dot: "green" };
+    if (d <= 14) return { key: "on", badge: "ON", label: "켜져 있음", days: d, dot: "green" };
+    if (d <= 30) return { key: "static", badge: "PAUSE", label: "지지직", days: d, dot: "red" };
+    if (d <= 90) return { key: "night", badge: "PAUSE", label: "혼자 켜진 밤", days: d, dot: "red" };
+    return { key: "offline", badge: "OFFLINE", label: "꺼짐", days: d, dot: "gray" };
   }
 
   function daysLabel(d) {
@@ -129,7 +130,7 @@
   }
 
   function cellToLocal(x, y) {
-    return { x: (x - GRID_MIN) * CELL, y: (y - GRID_MIN) * CELL };
+    return { x: (x - GRID_MIN) * CELL_W, y: (y - GRID_MIN) * CELL_H };
   }
 
   function loadState() {
@@ -251,24 +252,23 @@
   }
 
   /* —— camera —— */
+  function viewOrigin() {
+    const vp = $("#viewport");
+    const w = vp ? vp.clientWidth : 0;
+    const h = vp ? vp.clientHeight : 0;
+    if (!state || !projects().length) return { x: w / 2, y: h / 2 };
+    return { x: w / 2, y: Math.min(270, h * 0.48) };
+  }
+
   function applyCamera() {
     const vp = $("#viewport");
     const wall = $("#wall");
     if (!vp || !wall) return;
+    const o = viewOrigin();
     wall.style.transform =
-      "translate(" + vp.clientWidth / 2 + "px," + vp.clientHeight / 2 + "px) scale(" +
+      "translate(" + o.x + "px," + o.y + "px) scale(" +
       camera.scale + ") translate(" + (-camera.cx) + "px," + (-camera.cy) + "px)";
     renderMinimap();
-  }
-
-  function scaleToKeepCluster(cx, cy) {
-    const vp = $("#viewport");
-    const b = contentBounds();
-    if (!vp || !b.w) return DEFAULT_SCALE;
-    const needW = 2 * Math.max(cx - b.x, b.x + b.w - cx);
-    const needH = 2 * Math.max(cy - b.y, b.y + b.h - cy);
-    const fit = Math.min(vp.clientWidth / Math.max(needW, 1), vp.clientHeight / Math.max(needH, 1));
-    return Math.min(DEFAULT_SCALE, Math.max(SCALE_MIN, fit * 0.9));
   }
 
   function centerOnLatest(animate) {
@@ -277,19 +277,18 @@
     if (p) {
       applySizes();
       const loc = cellToLocal(p.x + p.w / 2, p.y + p.h / 2);
-      const scale = scaleToKeepCluster(loc.x, loc.y);
-      if (animate) animateCamera(loc.x, loc.y, scale);
+      if (animate) animateCamera(loc.x, loc.y, DEFAULT_SCALE);
       else {
         camera.cx = loc.x;
         camera.cy = loc.y;
-        camera.scale = scale;
+        camera.scale = DEFAULT_SCALE;
         applyCamera();
       }
     } else {
       const loc = cellToLocal(0.5, 0.5);
       camera.cx = loc.x;
       camera.cy = loc.y;
-      camera.scale = 0.95;
+      camera.scale = 1.05;
       applyCamera();
     }
   }
@@ -323,15 +322,16 @@
 
   function worldFromEvent(e) {
     const r = $("#viewport").getBoundingClientRect();
+    const o = viewOrigin();
     return {
-      x: camera.cx + (e.clientX - r.left - r.width / 2) / camera.scale,
-      y: camera.cy + (e.clientY - r.top - r.height / 2) / camera.scale,
+      x: camera.cx + (e.clientX - r.left - o.x) / camera.scale,
+      y: camera.cy + (e.clientY - r.top - o.y) / camera.scale,
     };
   }
 
   /* —— render wall —— */
   function tvScreenHTML(opts) {
-    const badgeDot = opts.dot ? '<i class="dot"></i>' : "";
+    const badgeDot = opts.dot ? '<i class="dot ' + esc(opts.dot) + '"></i>' : "";
     const name = opts.name ? '<p class="tv-name">' + esc(opts.name) + "</p>" : "";
     const badge = opts.badge
       ? '<div class="tv-badge">' + badgeDot + esc(opts.badge) + "</div>"
@@ -352,12 +352,8 @@
         : "";
       body = img;
     }
-    const ambient = opts.src && opts.kind !== "nosignal" && opts.kind !== "ended" && opts.kind !== "offline"
-      ? '<div class="tv-ambient" style="background-image:url(\'' + esc(opts.src) + "')\"></div>"
-      : "";
     const staticLayer = opts.kind === "static" ? '<div class="tv-static"></div>' : "";
     return (
-      ambient +
       '<div class="tv-screen">' +
       body +
       '<div class="tv-glow"></div>' +
@@ -406,8 +402,8 @@
       el.dataset.id = p.id;
       el.style.left = loc.x + "px";
       el.style.top = loc.y + "px";
-      el.style.width = p.w * CELL - GAP + "px";
-      el.style.height = p.h * CELL - GAP + "px";
+      el.style.width = p.w * CELL_W - GAP + "px";
+      el.style.height = p.h * CELL_H - GAP + "px";
       if (hideOthers && p.category !== activeCat) el.classList.add("is-dim");
       el.innerHTML = tvScreenHTML({
         kind: kind,
@@ -427,8 +423,8 @@
       rec.dataset.special = "recap";
       rec.style.left = loc.x + "px";
       rec.style.top = loc.y + "px";
-      rec.style.width = CELL - GAP + "px";
-      rec.style.height = CELL - GAP + "px";
+      rec.style.width = CELL_W - GAP + "px";
+      rec.style.height = CELL_H - GAP + "px";
       rec.innerHTML = tvScreenHTML({
         kind: "recap",
         name: "주간 특집",
@@ -446,15 +442,15 @@
     plus.dataset.y = String(plusAt.y);
     plus.style.left = ploc.x + "px";
     plus.style.top = ploc.y + "px";
-    plus.style.width = CELL - GAP + "px";
-    plus.style.height = CELL - GAP + "px";
-    plus.innerHTML = tvScreenHTML({ kind: "plus", badge: "OFFLINE", name: "" });
+    plus.style.width = CELL_W - GAP + "px";
+    plus.style.height = CELL_H - GAP + "px";
+    plus.innerHTML = tvScreenHTML({ kind: "plus", badge: "OFFLINE", name: "", dot: "gray" });
     wall.appendChild(plus);
 
     if (!list.length) {
       const wrap = document.createElement("div");
       wrap.className = "mascot-wrap";
-      wrap.style.left = ploc.x + CELL - 8 + "px";
+      wrap.style.left = ploc.x + CELL_W - 8 + "px";
       wrap.style.top = ploc.y + 28 + "px";
       wrap.innerHTML =
         '<svg class="mascot-blob" viewBox="0 0 64 56" xmlns="http://www.w3.org/2000/svg">' +
@@ -478,7 +474,7 @@
   function renderCats() {
     const box = $("#cat-tabs");
     const cats = ["__all"].concat(state.categories);
-    box.innerHTML = cats
+    box.innerHTML = '<div class="tab-pill">' + cats
       .map((c) => {
         const label = c === "__all" ? "전체" : c;
         const on = c === activeCat ? " is-on" : "";
@@ -488,7 +484,7 @@
           '<span class="cat-x" data-del="' + esc(c) + '">×</span></button>'
         );
       })
-      .join("");
+      .join("") + "</div>";
   }
 
   function contentBounds() {
@@ -511,9 +507,9 @@
     const rec = cellToLocal(state.recap.x, state.recap.y);
     minX = Math.min(minX, rec.x);
     minY = Math.min(minY, rec.y);
-    maxX = Math.max(maxX, rec.x + CELL);
-    maxY = Math.max(maxY, rec.y + CELL);
-    const pad = CELL;
+    maxX = Math.max(maxX, rec.x + CELL_W);
+    maxY = Math.max(maxY, rec.y + CELL_H);
+    const pad = CELL_W;
     return { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
   }
 
@@ -546,28 +542,29 @@
       const vs = visualState(p);
       const loc = cellToLocal(p.x, p.y);
       const colors = {
-        onair: "#c44545",
-        on: "#8a8a90",
-        static: "#6a7a8a",
-        night: "#3a5a78",
-        offline: "#2a2a2e",
-        ended: "#5a5a20",
-        nosignal: "#1a3a88",
+        onair: "#7a7a7a",
+        on: "#5a5a5a",
+        static: "#4a4a4a",
+        night: "#3a3a3a",
+        offline: "#2e2e2e",
+        ended: "#555555",
+        nosignal: "#333333",
       };
       ctx.fillStyle = colors[vs.key] || "#444";
-      ctx.fillRect(loc.x * scale + ox, loc.y * scale + oy, (p.w * CELL - GAP) * scale, (p.h * CELL - GAP) * scale);
+      ctx.fillRect(loc.x * scale + ox, loc.y * scale + oy, (p.w * CELL_W - GAP) * scale, (p.h * CELL_H - GAP) * scale);
     });
     if (projects().length) {
       const loc = cellToLocal(state.recap.x, state.recap.y);
-      ctx.fillStyle = "#622";
-      ctx.fillRect(loc.x * scale + ox, loc.y * scale + oy, (CELL - GAP) * scale, (CELL - GAP) * scale);
+      ctx.fillStyle = "#4a4a4a";
+      ctx.fillRect(loc.x * scale + ox, loc.y * scale + oy, (CELL_W - GAP) * scale, (CELL_H - GAP) * scale);
     }
     const vp = $("#viewport");
     if (vp) {
+      const o = viewOrigin();
       const vw = vp.clientWidth / camera.scale;
       const vh = vp.clientHeight / camera.scale;
-      const vx = camera.cx - vw / 2;
-      const vy = camera.cy - vh / 2;
+      const vx = camera.cx - o.x / camera.scale;
+      const vy = camera.cy - o.y / camera.scale;
       ctx.strokeStyle = "rgba(240,240,240,0.7)";
       ctx.lineWidth = 1;
       ctx.strokeRect(vx * scale + ox, vy * scale + oy, vw * scale, vh * scale);
@@ -889,9 +886,9 @@
         return { x: x, y: y, mood: it.update.mood || "😐" };
       });
       const d = coords.map((c, i) => (i ? "L" : "M") + c.x.toFixed(1) + " " + c.y.toFixed(1)).join(" ");
-      chart += '<path d="' + d + '" fill="none" stroke="#c44545" stroke-width="2"/>';
+      chart += '<path d="' + d + '" fill="none" stroke="#b0b0b0" stroke-width="2"/>';
       coords.forEach((c) => {
-        chart += '<circle cx="' + c.x + '" cy="' + c.y + '" r="4" fill="#1a1a1c" stroke="#c44545"/>';
+        chart += '<circle cx="' + c.x + '" cy="' + c.y + '" r="4" fill="#1a1a1c" stroke="#b0b0b0"/>';
         chart += '<text x="' + c.x + '" y="' + (c.y - 10) + '" text-anchor="middle" font-size="12">' + c.mood + "</text>";
       });
     }
@@ -1313,8 +1310,8 @@
             const world = worldFromEvent(e);
             const tlx = world.x - info.ox;
             const tly = world.y - info.oy;
-            const nx = Math.round(tlx / CELL + GRID_MIN);
-            const ny = Math.round(tly / CELL + GRID_MIN);
+            const nx = Math.round(tlx / CELL_W + GRID_MIN);
+            const ny = Math.round(tly / CELL_H + GRID_MIN);
             const dirX = nx - p.x;
             const dirY = ny - p.y;
             const dir = Math.abs(dirX) >= Math.abs(dirY) ? (dirX < 0 ? "left" : "right") : (dirY < 0 ? "up" : "down");
