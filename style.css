@@ -1354,7 +1354,7 @@ body:not(.on-wall) .hud-br { display: none; }
 }
 .feed {
   max-width: 580px;
-  margin: 0;            /* left-aligned in the main area, like the ref */
+  margin: 0 auto;       /* centered in the main area */
   padding-top: 4px;
 }
 .feed-chip {
