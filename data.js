@@ -95,7 +95,7 @@
             file("model3d", 8, "포탈 블록아웃"),
           ]),
           u("s5", "pt-illust", "2026-10-22", "적 캐릭터 A 콘셉트", "실루엣 3안 중 2안 채택.", "🔥", [file("image", 7, "적 A")]),
-          u("s6", "pt-bg", "2026-10-15", "마을 원경", "저녁 보라 톤으로 맞추는 중.", "😊", [file("image", 12, "마을")]),
+          u("s6", "pt-bg", "2026-10-15", "마을 원경", "저녁 톤으로 맞추는 중. 아직 보여주기 부끄러움.", "😊", [file("image", 12, "마을")], { private: true }),
           u("s7", "pt-illust", "2026-10-07", "주인공 실루엣 3안", "한 달 전 오늘의 선택. 2안이 채택됐다.", "✨", [file("image", 2, "실루엣")]),
           u("s8", "pt-ui", "2026-09-28", "타이틀 화면 초안", "로고 위치만 잡음.", "😐", [file("image", 5, "타이틀")]),
           u("s9", "pt-3d", "2026-09-18", "나무 모듈", "재사용 가능한 세 그루.", "😐", [file("model3d", 8, "나무")]),
@@ -304,4 +304,25 @@
     ],
     trash: [],
   };
+
+  /* feed mock: neutral gray placeholder media in 1–4 tile layouts, plus a few next-todo memos */
+  (function enrich(seed) {
+    const counts = [2, 1, 3, 4, 2, 1, 2, 3];
+    const labels = ["시안 A", "시안 B", "디테일", "비교컷"];
+    const todos = ["여백 한 번 더 보기", "색 대비 체크", "피드백 정리해서 반영", "다음 컷 러프 잡기"];
+    seed.projects.forEach(function (p) {
+      const ups = (p.updates || []).slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+      ups.forEach(function (u, i) {
+        const files = u.files || [];
+        if (files.length === 1 && files[0].type === "image") {
+          const n = counts[(i + p.id.length) % counts.length];
+          u.files = [];
+          for (let k = 0; k < n; k++) {
+            u.files.push({ type: "image", src: "", name: n === 1 ? (files[0].name || "") : labels[k] });
+          }
+        }
+        if (!u.nextTodo && i < 2 && !p.completed) u.nextTodo = i === 0 && p.nextTodo ? p.nextTodo : todos[(i + p.id.length) % todos.length];
+      });
+    });
+  })(window.TV_SEED);
 })();

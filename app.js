@@ -10,7 +10,7 @@
   const SCALE_MAX = 1.75;
   const DEFAULT_SCALE = 1;
   const AUTH_KEY = "tv-archive-unlocked";
-  const DATA_KEY = "tv-archive-data-v3";
+  const DATA_KEY = "tv-archive-data-v4";
   const SIDEBAR_KEY = "tv-archive-sidebar-collapsed";
   const PASSWORD = "0000";
   const MOODS = ["😊", "😐", "😵", "🔥", "✨", "😢"];
@@ -29,8 +29,6 @@
   let pendingEdit = null;
   let currentId = null;
   let currentCh = null;
-  let currentUp = null;
-  let currentFile = 0;
   let recapPeriod = "week";
   let oaFiles = [];
   let oaMood = "😊";
@@ -99,7 +97,10 @@
   }
 
   function sortedUpdates(p) {
-    return (p.updates || []).slice().sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    return (p.updates || [])
+      .map((u, i) => [u, i])
+      .sort((a, b) => (a[0].date < b[0].date ? 1 : a[0].date > b[0].date ? -1 : b[1] - a[1]))
+      .map((x) => x[0]);
   }
 
   function lastUpdate(p) {
@@ -480,11 +481,11 @@
 
   let cameraAnimation = 0;
 
-  function animateCamera(tx, ty, ts) {
+  function animateCamera(tx, ty, ts, duration) {
     const animation = ++cameraAnimation;
     const sx = camera.cx, sy = camera.cy, ss = camera.scale;
     const t0 = performance.now();
-    const dur = 520;
+    const dur = duration || 520;
     function step(now) {
       if (animation !== cameraAnimation) return;
       const t = Math.min(1, (now - t0) / dur);
@@ -511,6 +512,19 @@
   }
 
   /* —— render wall —— */
+  const MASCOT_SVG =
+        '<svg class="mascot-blob" viewBox="0 0 64 56" xmlns="http://www.w3.org/2000/svg">' +
+        '<ellipse cx="32" cy="30" rx="22" ry="18" fill="#3a3a40"/>' +
+        '<ellipse cx="32" cy="22" rx="16" ry="14" fill="#4a4a52"/>' +
+        '<circle cx="26" cy="22" r="3.2" fill="#efece4"/>' +
+        '<circle cx="38" cy="22" r="3.2" fill="#efece4"/>' +
+        '<circle cx="26.6" cy="22.4" r="1.3" fill="#222"/>' +
+        '<circle cx="38.6" cy="22.4" r="1.3" fill="#222"/>' +
+        '<path d="M28 30 q4 3 8 0" stroke="#c8c4bc" stroke-width="1.6" fill="none" stroke-linecap="round"/>' +
+        '<circle cx="46" cy="10" r="3.5" fill="#5a5a62"/>' +
+        '<rect x="45" y="2" width="2" height="8" rx="1" fill="#6a6a72"/>' +
+        "</svg>";
+
   function tvScreenHTML(opts) {
     const badgeDot = opts.dot ? '<i class="dot ' + esc(opts.dot) + '"></i>' : "";
     const name = opts.name ? '<p class="tv-name">' + esc(opts.name) + "</p>" : "";
@@ -602,17 +616,7 @@
       wrap.style.left = c.x + "px";
       wrap.style.top = c.y + "px";
       wrap.innerHTML =
-        '<svg class="mascot-blob" viewBox="0 0 64 56" xmlns="http://www.w3.org/2000/svg">' +
-        '<ellipse cx="32" cy="30" rx="22" ry="18" fill="#3a3a40"/>' +
-        '<ellipse cx="32" cy="22" rx="16" ry="14" fill="#4a4a52"/>' +
-        '<circle cx="26" cy="22" r="3.2" fill="#efece4"/>' +
-        '<circle cx="38" cy="22" r="3.2" fill="#efece4"/>' +
-        '<circle cx="26.6" cy="22.4" r="1.3" fill="#222"/>' +
-        '<circle cx="38.6" cy="22.4" r="1.3" fill="#222"/>' +
-        '<path d="M28 30 q4 3 8 0" stroke="#c8c4bc" stroke-width="1.6" fill="none" stroke-linecap="round"/>' +
-        '<circle cx="46" cy="10" r="3.5" fill="#5a5a62"/>' +
-        '<rect x="45" y="2" width="2" height="8" rx="1" fill="#6a6a72"/>' +
-        "</svg>" +
+        MASCOT_SVG +
         '<div class="mascot-speech">첫 방송을 시작해볼까...?<span class="mascot-hint">오른쪽 아래 <b>+ 새 프로젝트</b>를 눌러봐 ↘</span></div>';
       wall.appendChild(wrap);
     }
@@ -784,23 +788,8 @@
     renderSideTree();
   }
 
-  let projClickAt = 0;
-  let projClickId = "";
 
-  function focusProject(p) {
-    if (!p) return;
-    focusedId = p.id;
-    if (activeCat !== "__all" && p.category && p.category !== activeCat) {
-      activeCat = p.category;
-      renderWall();
-      renderCats();
-    } else {
-      $$(".tree-row.project").forEach(function (el) {
-        el.classList.toggle("is-on", el.getAttribute("data-pid") === p.id);
-      });
-    }
-    flyToProject(p);
-  }
+
 
   function contentBounds() {
     applySizes();
@@ -877,13 +866,14 @@
     host._map = { scale: scale, ox: ox, oy: oy };
   }
 
-  /* —— zoom —— */
+  /* —— project feed —— */
   function getProject(id) {
     return state.projects.find((p) => p.id === id);
   }
 
   function visibleUpdate(p, u) {
     if (!u) return false;
+    if (p && p.private && !unlocked) return false;
     if (u.private && !unlocked) return false;
     return true;
   }
@@ -892,80 +882,91 @@
     return sortedUpdates(p).filter((u) => !chId || u.channelId === chId);
   }
 
-  function currentUpdate(p) {
-    return (p.updates || []).find((u) => u.id === currentUp) || lastUpdate(p);
-  }
+  let mountToken = 0;
+  let threeHost = null;
 
   function unmount3D() {
+    mountToken++;
     if (threeCtl && threeCtl.dispose) threeCtl.dispose();
     threeCtl = null;
+    if (threeHost) threeHost.classList.remove("is-live");
+    threeHost = null;
   }
 
   function mount3D(el) {
+    if (threeHost === el && threeCtl) return;
     unmount3D();
+    const token = mountToken;
+    threeHost = el;
+    el.classList.add("is-live");
     const run = function (THREE) {
-    if (!THREE) {
-      el.innerHTML = '<div class="tv-nosignal"><span>Three.js 예정</span></div>';
-      return;
-    }
-    const w = el.clientWidth || 640;
-    const h = el.clientHeight || 360;
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x191919);
-    const cam = new THREE.PerspectiveCamera(50, w / h, 0.1, 100);
-    cam.position.set(0, 0.55, 3.2);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(w, h);
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-    el.appendChild(renderer.domElement);
-    scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-    const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-    dir.position.set(2.4, 3, 4);
-    scene.add(dir);
-    const cube = new THREE.Mesh(
-      new THREE.BoxGeometry(1.15, 1.15, 1.15),
-      new THREE.MeshStandardMaterial({ color: 0x8a8a8a, metalness: 0.18, roughness: 0.42 })
-    );
-    scene.add(cube);
-    let spinning = false, lx = 0, ly = 0, mx = 0.4, my = 0.25, dist = 3.2;
-    const onDown = (e) => { spinning = true; lx = e.clientX; ly = e.clientY; el.setPointerCapture(e.pointerId); };
-    const onMove = (e) => {
-      if (!spinning) return;
-      mx += (e.clientX - lx) * 0.01;
-      my += (e.clientY - ly) * 0.01;
-      lx = e.clientX;
-      ly = e.clientY;
-    };
-    const onUp = () => { spinning = false; };
-    const onWheel = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dist = Math.min(8, Math.max(1.4, dist + e.deltaY * 0.005));
-    };
-    el.addEventListener("pointerdown", onDown);
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("wheel", onWheel, { passive: false });
-    let raf = 0;
-    const loop = () => {
-      raf = requestAnimationFrame(loop);
-      cube.rotation.y = mx;
-      cube.rotation.x = my;
-      cam.position.z = dist;
-      renderer.render(scene, cam);
-    };
-    loop();
-    threeCtl = {
-      dispose: function () {
-        cancelAnimationFrame(raf);
-        el.removeEventListener("pointerdown", onDown);
-        el.removeEventListener("pointermove", onMove);
-        el.removeEventListener("pointerup", onUp);
-        el.removeEventListener("wheel", onWheel);
-        renderer.dispose();
-        el.innerHTML = "";
-      },
-    };
+      if (token !== mountToken || !el.isConnected) return;
+      const w = el.clientWidth || 560;
+      const h = el.clientHeight || 320;
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x262626);
+      const cam = new THREE.PerspectiveCamera(50, w / h, 0.1, 100);
+      cam.position.set(0, 0.55, 3.2);
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(w, h);
+      renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+      renderer.domElement.className = "viewer3d-canvas";
+      el.appendChild(renderer.domElement);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+      const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+      dir.position.set(2.4, 3, 4);
+      scene.add(dir);
+      const cube = new THREE.Mesh(
+        new THREE.BoxGeometry(1.15, 1.15, 1.15),
+        new THREE.MeshStandardMaterial({ color: 0x8a8a8a, metalness: 0.18, roughness: 0.42 })
+      );
+      scene.add(cube);
+      let spinning = false, moved = false, lx = 0, ly = 0, mx = 0.4, my = 0.25, dist = 3.2;
+      const onDown = (e) => { spinning = true; moved = false; lx = e.clientX; ly = e.clientY; el.setPointerCapture(e.pointerId); };
+      const onMove = (e) => {
+        if (!spinning) return;
+        if (Math.abs(e.clientX - lx) + Math.abs(e.clientY - ly) > 1) moved = true;
+        mx += (e.clientX - lx) * 0.01;
+        my += (e.clientY - ly) * 0.01;
+        lx = e.clientX;
+        ly = e.clientY;
+      };
+      const onUp = () => { spinning = false; };
+      // a drag-rotate must not also count as a "click to open lightbox"
+      const onClick = (e) => { if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; } };
+      const onWheel = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dist = Math.min(8, Math.max(1.4, dist + e.deltaY * 0.005));
+      };
+      el.addEventListener("pointerdown", onDown);
+      el.addEventListener("pointermove", onMove);
+      el.addEventListener("pointerup", onUp);
+      el.addEventListener("click", onClick, true);
+      el.addEventListener("wheel", onWheel, { passive: false });
+      let raf = 0;
+      const loop = () => {
+        raf = requestAnimationFrame(loop);
+        if (!spinning) mx += 0.003;
+        cube.rotation.y = mx;
+        cube.rotation.x = my;
+        cam.position.z = dist;
+        renderer.render(scene, cam);
+      };
+      loop();
+      threeCtl = {
+        dispose: function () {
+          cancelAnimationFrame(raf);
+          el.removeEventListener("pointerdown", onDown);
+          el.removeEventListener("pointermove", onMove);
+          el.removeEventListener("pointerup", onUp);
+          el.removeEventListener("click", onClick, true);
+          el.removeEventListener("wheel", onWheel);
+          renderer.dispose();
+          if (renderer.forceContextLoss) renderer.forceContextLoss();
+          if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
+        },
+      };
     };
     if (window.THREE) {
       run(window.THREE);
@@ -977,170 +978,406 @@
         run(mod);
       })
       .catch(function () {
-        el.innerHTML = '<div class="tv-nosignal"><span>Three.js 예정</span></div>';
+        if (token !== mountToken) return;
+        el.classList.remove("is-live");
+        const hint = el.querySelector(".media-hint");
+        if (hint) hint.textContent = "Three.js 예정";
+        else el.insertAdjacentHTML("beforeend", '<span class="media-hint">Three.js 예정</span>');
       });
   }
 
-  function renderZoom() {
+  /* line icons (stroke = currentColor) */
+  const ICON = {
+    more: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="1.3"/><circle cx="10" cy="10" r="1.3"/><circle cx="15" cy="10" r="1.3"/></svg>',
+    todo: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.5l1.4 1.4L8 4.3M4 11.5l1.4 1.4L8 10.3M10.5 5.8H16M10.5 11.8H16M4.5 16.5H16"/></svg>',
+    link: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.4 11.6a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-.9.9M11.6 8.4a3 3 0 0 0-4.2 0L4.8 11a3 3 0 0 0 4.2 4.2l.9-.9"/></svg>',
+    up: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 12.5L10 8l4.5 4.5"/></svg>',
+    down: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 7.5L10 12l4.5-4.5"/></svg>',
+    play: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 5.5v9l7-4.5z"/></svg>',
+    cube: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3l6 3.3v7.4L10 17l-6-3.3V6.3zM4 6.3l6 3.4 6-3.4M10 9.7V17"/></svg>',
+  };
+
+  let newPostId = null;
+  let todoOpen = {};
+
+  function fmtSlash(d) {
+    return String(d || "").replace(/-/g, "/");
+  }
+
+  function channelName(p, chId) {
+    const ch = (p.channels || []).find((c) => c.id === chId);
+    return ch ? ch.name : "채널";
+  }
+
+  function isVideoSrc(src) {
+    return !!src && (/^data:video/.test(src) || /\.(mp4|webm|ogg|mov)(\?|$)/i.test(src));
+  }
+
+  function mediaTileHTML(f, i) {
+    const shade = " shade-" + (i % 4);
+    const cap = f.name ? '<span class="media-cap">' + esc(f.name) + "</span>" : "";
+    if (f.type === "model3d") {
+      return '<button type="button" class="media-tile is-3d' + shade + '" data-fi="' + i + '">' +
+        '<span class="media-glyph">' + ICON.cube + "</span>" +
+        '<span class="media-hint">3D · 올리면 돌려볼 수 있어</span>' + cap + "</button>";
+    }
+    if (f.type === "video") {
+      const vid = isVideoSrc(f.src) ? '<video muted loop playsinline preload="metadata" src="' + esc(f.src) + '"></video>' : "";
+      return '<button type="button" class="media-tile is-video' + shade + '" data-fi="' + i + '">' + vid +
+        '<span class="media-play">' + ICON.play + "</span>" + cap + "</button>";
+    }
+    const img = f.src ? '<img alt="" loading="lazy" src="' + esc(f.src) + '" />' : "";
+    return '<button type="button" class="media-tile' + (f.src ? " has-img" : "") + shade + '" data-fi="' + i + '">' + img + cap + "</button>";
+  }
+
+  function postHTML(p, u, idx, total) {
+    const open = visibleUpdate(p, u);
+    const files = open ? u.files || [] : [];
+    const todo = u.nextTodo || "";
+    const meta = "@" + esc(channelName(p, u.channelId)) + " · " + esc(fmtSlash(u.date));
+    let media = "";
+    if (!open) {
+      media = '<div class="post-media n1"><button type="button" class="media-tile is-nosignal" data-unlock="1">' +
+        '<div class="tv-nosignal"><span>NO SIGNAL</span></div><span class="media-hint">눌러서 잠금 풀기</span></button></div>';
+    } else if (files.length) {
+      const n = Math.min(files.length, 4);
+      media = '<div class="post-media n' + n + '">' + files.slice(0, 4).map(mediaTileHTML).join("") +
+        (files.length > 4 ? '<span class="media-more">+' + (files.length - 4) + "</span>" : "") + "</div>";
+    }
+    const priv = u.private ? '<span class="post-lock" title="비공개">비공개</span>' : "";
+    return (
+      '<article class="post' + (u.id === newPostId ? " is-new" : "") + (open ? "" : " is-locked") + '" data-up="' + esc(u.id) + '" id="post-' + esc(u.id) + '">' +
+      '<header class="post-head">' +
+      '<span class="post-avatar" aria-hidden="true"></span>' +
+      '<div class="post-who"><b>' + esc(p.name) + "</b>" + priv + '<span class="post-meta">' + meta + "</span></div>" +
+      '<div class="post-tools">' +
+      '<button type="button" class="sq-btn mood" data-act="mood" title="기분">' + esc(open ? (u.mood || "·") : "·") + "</button>" +
+      '<button type="button" class="sq-btn" data-act="menu" title="게시물 메뉴">' + ICON.more + "</button>" +
+      "</div></header>" +
+      '<h3 class="post-title">' + esc(open ? (u.title || "제목 없음") : "비공개 방송") + "</h3>" +
+      (open && u.description ? '<p class="post-desc">' + esc(u.description) + "</p>" : "") +
+      media +
+      (open && todo ? '<div class="post-todo"' + (todoOpen[u.id] ? "" : " hidden") + '><b>다음 할 일</b><span>' + esc(todo) + "</span></div>" : "") +
+      '<footer class="post-foot">' +
+      '<div class="post-foot-l">' +
+      '<button type="button" class="sq-btn' + (todoOpen[u.id] ? " is-on" : "") + '" data-act="todo" title="다음 할 일"' + (open && todo ? "" : " disabled") + ">" + ICON.todo + "</button>" +
+      '<button type="button" class="sq-btn" data-act="link" title="링크 복사">' + ICON.link + "</button>" +
+      "</div>" +
+      '<div class="post-foot-r">' +
+      '<button type="button" class="sq-btn" data-act="prev" title="이전(최신) 게시물"' + (idx === 0 ? " disabled" : "") + ">" + ICON.up + "</button>" +
+      '<button type="button" class="sq-btn" data-act="next" title="다음(이전) 게시물"' + (idx === total - 1 ? " disabled" : "") + ">" + ICON.down + "</button>" +
+      "</div></footer></article>"
+    );
+  }
+
+  function renderFeed() {
     const p = getProject(currentId);
-    if (!p) return closeZoom();
-    const vs = visualState(p);
-    const u = currentUpdate(p);
-    const files = u && visibleUpdate(p, u) ? u.files || [] : [];
-    if (currentFile >= files.length) currentFile = 0;
-    const file = files[currentFile];
-
-    const big = $("#big-tv");
-    big.className = "tv tv-big size-2x2 state-" + vs.key;
-    let kind = vs.key === "nosignal" ? "nosignal" : vs.key === "ended" ? "ended" : vs.key === "offline" ? "offline" : vs.key === "static" ? "static" : "image";
-    const hideContent = (p.private && !unlocked) || (u && u.private && !unlocked);
-    if (hideContent) kind = "nosignal";
-    if (p.completed && !hideContent) kind = "ended";
-
-    let src = file ? file.src : coverOf(p);
-    if (hideContent) src = "";
-    big.innerHTML = tvScreenHTML({
-      kind: kind === "ended" ? "ended" : kind,
-      src: hideContent ? "" : src,
-      name: p.name,
-      badge: hideContent ? "NO SIGNAL" : vs.badge,
-      dot: !hideContent && vs.dot,
-    });
-
-    const screen = $(".tv-screen", big);
-    if (!hideContent && file && file.type === "model3d") {
-      const holder = document.createElement("div");
-      holder.id = "viewer3d";
-      screen.insertBefore(holder, screen.firstChild);
-      const note = document.createElement("div");
-      note.className = "model-note";
-      note.textContent = "Three.js · 드래그로 회전 · 휠로 줌";
-      screen.appendChild(note);
-      requestAnimationFrame(() => mount3D(holder));
+    if (!p) return closeFeed();
+    unmount3D();
+    $("#post-pop").hidden = true;
+    const posts = channelUpdates(p, currentCh);
+    const feed = $("#feed");
+    const chip = currentCh
+      ? '<div class="feed-chip"><span>@' + esc(channelName(p, currentCh)) + " · " + posts.length + "개 방송</span>" +
+        '<button type="button" data-act="all-ch">전체 채널 보기</button></div>'
+      : '<div class="feed-chip"><span>' + esc(p.name) + " · 전체 채널 · " + posts.length + "개 방송</span></div>";
+    if (!(p.updates || []).length) {
+      feed.innerHTML =
+        '<div class="feed-empty">' +
+        MASCOT_SVG +
+        '<p class="feed-empty-text">첫 방송을 시작해볼까...?</p>' +
+        '<button type="button" class="btn-onair" data-act="onair">● ON AIR</button></div>';
+    } else if (!posts.length) {
+      feed.innerHTML = chip + '<p class="feed-none">이 채널엔 아직 방송이 없어.</p>';
     } else {
-      unmount3D();
-      if (!hideContent && file && file.type === "video") {
-        const layer = document.createElement("div");
-        layer.className = "play-layer";
-        layer.textContent = "▶";
-        layer.addEventListener("click", (e) => {
-          e.stopPropagation();
-          if (layer.classList.contains("is-playing")) {
-            layer.classList.remove("is-playing");
-            layer.textContent = "▶";
-            const vid = $("video", screen);
-            if (vid) vid.pause();
-          } else {
-            layer.classList.add("is-playing");
-            layer.textContent = "";
-            if (file.src && /\.(mp4|webm|ogg)$/i.test(file.src) || (file.src || "").indexOf("video") === 5) {
-              let vid = $("video", screen);
-              if (!vid && (file.src || "").slice(0, 10) === "data:video") {
-                vid = document.createElement("video");
-                vid.src = file.src;
-                vid.controls = true;
-                vid.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:cover";
-                screen.insertBefore(vid, screen.firstChild);
-                vid.play();
-              }
-            }
-          }
-        });
-        screen.appendChild(layer);
-      }
+      feed.innerHTML = chip + posts.map((u, i) => postHTML(p, u, i, posts.length)).join("");
     }
-
-    const meta = $("#zoom-meta");
-    if (hideContent) {
-      meta.innerHTML = '<p class="zm-sub">NO SIGNAL</p>';
-    } else if (u) {
-      const ch = (p.channels || []).find((c) => c.id === u.channelId);
-      meta.innerHTML =
-        "<h3>" + esc(u.mood || "") + " " + esc(u.title || "제목 없음") + "</h3>" +
-        '<div class="zm-sub">' + esc(u.date) + (ch ? " · " + esc(ch.name) : "") + "</div>" +
-        (u.description ? '<p class="zm-desc">' + esc(u.description) + "</p>" : "") +
-        (u.nextTodo || p.nextTodo ? '<p class="zm-todo">다음 · ' + esc(u.nextTodo || p.nextTodo) + "</p>" : "");
-    } else {
-      meta.innerHTML = '<p class="zm-sub">아직 방송이 없어. ON AIR로 첫 송출을 해볼까?</p>';
-    }
-
-    const tabs = $("#channel-tabs");
-    tabs.innerHTML = (p.channels || [])
-      .map((c) => '<button type="button" class="ch-tab' + (c.id === currentCh ? " is-on" : "") + '" data-ch="' + esc(c.id) + '">' + esc(c.name) + "</button>")
-      .join("") +
-      '<button type="button" class="ch-tab add" id="btn-add-ch">+ 새 채널</button>';
-
-    const row = $("#vhs-row");
-    const tapes = channelUpdates(p, currentCh);
-    row.innerHTML = tapes
-      .map((t) => {
-        const hidden = t.private && !unlocked;
-        return (
-          '<button type="button" class="vhs' + (t.id === currentUp ? " is-on" : "") + (hidden ? " is-priv" : "") + '" data-up="' + esc(t.id) + '">' +
-          '<span class="vhs-label"><em>' + esc(t.date.slice(5)) + "</em><b>" + esc(hidden ? "NO SIGNAL" : (t.title || "무제")) + "</b></span></button>"
-        );
-      })
-      .join("") || '<p class="zm-sub">이 채널엔 아직 테이프가 없어.</p>';
-
-    const slots = $("#file-slots");
-    if (hideContent || !files.length) {
-      slots.innerHTML = "";
-    } else {
-      slots.innerHTML = files
-        .map((f, i) => {
-          if (f.type === "image" && f.src) {
-            return '<button type="button" class="fslot' + (i === currentFile ? " is-on" : "") + '" data-fi="' + i + '"><img alt="" src="' + esc(f.src) + '" /></button>';
-          }
-          if (f.type === "image") {
-            return '<button type="button" class="fslot' + (i === currentFile ? " is-on" : "") + '" data-fi="' + i + '"></button>';
-          }
-          return '<button type="button" class="fslot ' + esc(f.type) + (i === currentFile ? " is-on" : "") + '" data-fi="' + i + '">' + (f.type === "model3d" ? "3D" : "영상") + "</button>";
-        })
-        .join("");
-    }
-
-    $("#btn-prev-file").disabled = files.length < 2;
-    $("#btn-next-file").disabled = files.length < 2;
+    feed.classList.toggle("is-empty", !(p.updates || []).length);
     $("#btn-complete").textContent = p.completed ? "다시 켜기" : "방송 종료";
+    $("#btn-complete").classList.toggle("is-on", !!p.completed);
     $("#btn-toggle-private").textContent = p.private ? "공개로 전환" : "비공개 전환";
     renderSideTree();
   }
 
-  function openZoom(id, channelId) {
+  let wallCameraBeforeFeed = null;
+
+  function openFeed(id, channelId, opts) {
     const p = getProject(id);
     if (!p) return;
+    const wasOpen = !$("#feed-view").hidden;
+    if (!wasOpen) {
+      const saved = opts && opts.camera;
+      wallCameraBeforeFeed = saved || { cx: camera.cx, cy: camera.cy, scale: camera.scale };
+    }
+    if (currentId !== id) todoOpen = {};
     currentId = id;
     focusedId = id;
     expanded["proj:" + id] = true;
     expanded["cat:__all"] = true;
     if (p.category) expanded["cat:" + p.category] = true;
-    const latest = lastUpdate(p);
-    currentCh = latest ? latest.channelId : (p.channels[0] && p.channels[0].id);
-    currentUp = latest ? latest.id : null;
-    currentFile = 0;
-    if (channelId && (p.channels || []).some(function (c) { return c.id === channelId; })) {
-      currentCh = channelId;
-      const tapes = channelUpdates(p, currentCh);
-      currentUp = tapes[0] ? tapes[0].id : null;
+    currentCh = channelId && (p.channels || []).some((c) => c.id === channelId) ? channelId : null;
+    const view = $("#feed-view");
+    view.hidden = false;
+    if (!wasOpen && !reducedMotion()) {
+      view.classList.remove("is-entering");
+      void view.offsetWidth;
+      view.classList.add("is-entering");
+      setTimeout(() => view.classList.remove("is-entering"), 260);
     }
-    $("#zoom-view").hidden = false;
     $("#proj-menu").hidden = true;
     document.body.classList.remove("on-wall");
     closeRecapKeep();
     setRail("archive");
-    renderZoom();
+    renderFeed();
+    $("#feed-scroll").scrollTop = 0;
+  }
+
+  function closeFeed() {
+    unmount3D();
+    closeLightbox();
+    $("#feed-view").hidden = true;
+    $("#proj-menu").hidden = true;
+    $("#post-pop").hidden = true;
+    currentId = null;
+    currentCh = null;
+    document.body.classList.add("on-wall");
+    if (wallCameraBeforeFeed) {
+      camera.cx = wallCameraBeforeFeed.cx;
+      camera.cy = wallCameraBeforeFeed.cy;
+      camera.scale = wallCameraBeforeFeed.scale;
+      wallCameraBeforeFeed = null;
+      cameraAnimation++;
+    }
+    $("#wall").classList.remove("is-flying");
+    renderWall();
+    applyCamera();
     renderSideTree();
   }
 
-  function closeZoom() {
-    unmount3D();
-    $("#zoom-view").hidden = true;
-    $("#proj-menu").hidden = true;
-    currentId = null;
-    document.body.classList.add("on-wall");
-    renderWall();
-    renderSideTree();
+  /* clicking a TV on the wall: quick push-in toward it, then fade into its feed */
+  function flyIntoFeed(p) {
+    if (reducedMotion()) return openFeed(p.id);
+    const saved = { cx: camera.cx, cy: camera.cy, scale: camera.scale };
+    applySizes();
+    const loc = cellToLocal(p.x + p.w / 2, p.y + p.h / 2);
+    animateCamera(loc.x, loc.y, Math.min(2.6, camera.scale * 1.7), 240);
+    $("#wall").classList.add("is-flying");
+    setTimeout(() => {
+      if (!getProject(p.id)) return;
+      openFeed(p.id, null, { camera: saved });
+    }, 200);
   }
+
+  /* —— lightbox —— */
+  let lb = null;
+
+  function openLightbox(upId, fi) {
+    const p = getProject(currentId);
+    const u = p && (p.updates || []).find((x) => x.id === upId);
+    if (!u || !visibleUpdate(p, u) || !(u.files || []).length) return;
+    lb = { upId: upId, fi: fi || 0 };
+    $("#lightbox").hidden = false;
+    renderLightbox();
+  }
+
+  function renderLightbox() {
+    if (!lb) return;
+    const p = getProject(currentId);
+    const u = p && (p.updates || []).find((x) => x.id === lb.upId);
+    if (!u) return closeLightbox();
+    const files = u.files || [];
+    const n = files.length;
+    lb.fi = (lb.fi + n) % n;
+    const f = files[lb.fi];
+    unmount3D();
+    const stage = $("#lb-stage");
+    let inner = "";
+    if (f.type === "model3d") inner = '<div class="lb-media lb-3d"></div>';
+    else if (f.type === "video" && isVideoSrc(f.src)) inner = '<video class="lb-media" controls autoplay playsinline src="' + esc(f.src) + '"></video>';
+    else if (f.type === "video") inner = '<div class="lb-media lb-blank"><span class="media-play">' + ICON.play + "</span></div>";
+    else if (f.src) inner = '<img class="lb-media" alt="" src="' + esc(f.src) + '" />';
+    else inner = '<div class="lb-media lb-blank"></div>';
+    stage.innerHTML = inner + '<p class="lb-cap">' + esc(u.title || "") + (f.name ? " · " + esc(f.name) : "") + "</p>";
+    $("#lb-count").textContent = n > 1 ? (lb.fi + 1) + " / " + n : "";
+    $("#lb-prev").hidden = n < 2;
+    $("#lb-next").hidden = n < 2;
+    const holder = $(".lb-3d", stage);
+    if (holder) requestAnimationFrame(() => mount3D(holder));
+  }
+
+  function closeLightbox() {
+    if (!lb) return;
+    lb = null;
+    unmount3D();
+    $("#lightbox").hidden = true;
+    $("#lb-stage").innerHTML = "";
+  }
+
+  let toastTimer = 0;
+  function toast(msg) {
+    const t = $("#toast");
+    t.textContent = msg;
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, 1600);
+  }
+
+  function copyText(text) {
+    const done = () => toast("링크 복사했어");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, () => { fallbackCopy(text); done(); });
+    } else {
+      fallbackCopy(text);
+      done();
+    }
+  }
+  function fallbackCopy(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;left:-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch (e) { /* ignore */ }
+    ta.remove();
+  }
+
+  function scrollToPost(id) {
+    const el = document.getElementById("post-" + id);
+    if (!el) return;
+    const sc = $("#feed-scroll");
+    const top = el.offsetTop - 44;
+    sc.scrollTo({ top: Math.max(0, top), behavior: reducedMotion() ? "auto" : "smooth" });
+  }
+
+  function openPostPop(btn, html) {
+    const pop = $("#post-pop");
+    pop.innerHTML = html;
+    pop.hidden = false;
+    const host = $("#feed-view").getBoundingClientRect();
+    const r = btn.getBoundingClientRect();
+    pop.style.top = (r.bottom - host.top + 6) + "px";
+    pop.style.left = Math.max(8, r.right - host.left - pop.offsetWidth) + "px";
+  }
+
+  function bindFeed() {
+    const feed = $("#feed");
+    feed.addEventListener("click", (e) => {
+      const p = getProject(currentId);
+      if (!p) return;
+      const actBtn = e.target.closest("[data-act]");
+      const post = e.target.closest(".post[data-up]");
+      const u = post && (p.updates || []).find((x) => x.id === post.getAttribute("data-up"));
+      if (actBtn) {
+        e.stopPropagation();
+        const act = actBtn.getAttribute("data-act");
+        if (act === "onair") return ensureEdit(openOnAir);
+        if (act === "all-ch") { currentCh = null; return renderFeed(); }
+        if (!u) return;
+        if (act === "todo") {
+          todoOpen[u.id] = !todoOpen[u.id];
+          const memo = $(".post-todo", post);
+          if (memo) memo.hidden = !todoOpen[u.id];
+          actBtn.classList.toggle("is-on", !!todoOpen[u.id]);
+          return;
+        }
+        if (act === "link") {
+          return copyText(location.href.split("#")[0] + "#p=" + encodeURIComponent(p.id) + "&u=" + encodeURIComponent(u.id));
+        }
+        if (act === "prev" || act === "next") {
+          const sib = act === "prev" ? post.previousElementSibling : post.nextElementSibling;
+          if (sib && sib.matches(".post")) scrollToPost(sib.getAttribute("data-up"));
+          return;
+        }
+        if (act === "mood") {
+          if (!visibleUpdate(p, u)) return;
+          return openPostPop(actBtn, '<div class="mood-pick" data-up="' + esc(u.id) + '">' +
+            MOODS.map((m) => '<button type="button" data-mood="' + m + '"' + (m === u.mood ? ' class="is-on"' : "") + ">" + m + "</button>").join("") + "</div>");
+        }
+        if (act === "menu") {
+          return openPostPop(actBtn,
+            '<button type="button" data-post-act="private" data-up="' + esc(u.id) + '">' + (u.private ? "공개로 전환" : "비공개 전환") + "</button>" +
+            '<button type="button" data-post-act="delete" data-up="' + esc(u.id) + '" class="danger">이 방송 삭제</button>');
+        }
+        return;
+      }
+      if (e.target.closest("[data-unlock]")) {
+        return ensureEdit(() => renderFeed());
+      }
+      const tile = e.target.closest(".media-tile[data-fi]");
+      if (tile && u) openLightbox(u.id, Number(tile.getAttribute("data-fi")));
+    });
+    // hover: video previews play, 3D tiles become live viewers
+    feed.addEventListener("pointerover", (e) => {
+      const tile = e.target.closest(".media-tile");
+      if (!tile || tile.contains(e.relatedTarget)) return;
+      if (tile.classList.contains("is-3d")) mount3D(tile);
+      const v = $("video", tile);
+      if (v) { v.play().catch(() => {}); tile.classList.add("is-playing"); }
+    });
+    feed.addEventListener("pointerout", (e) => {
+      const tile = e.target.closest(".media-tile");
+      if (!tile || tile.contains(e.relatedTarget)) return;
+      const v = $("video", tile);
+      if (v) { v.pause(); tile.classList.remove("is-playing"); }
+    });
+
+    $("#post-pop").addEventListener("click", (e) => {
+      e.stopPropagation();
+      const p = getProject(currentId);
+      if (!p) return;
+      const moodBtn = e.target.closest("[data-mood]");
+      if (moodBtn) {
+        const id = moodBtn.closest("[data-up]").getAttribute("data-up");
+        return ensureEdit(() => {
+          const u = (p.updates || []).find((x) => x.id === id);
+          if (!u) return;
+          u.mood = moodBtn.getAttribute("data-mood");
+          saveState();
+          renderFeed();
+        });
+      }
+      const b = e.target.closest("[data-post-act]");
+      if (!b) return;
+      const id = b.getAttribute("data-up");
+      const act = b.getAttribute("data-post-act");
+      $("#post-pop").hidden = true;
+      ensureEdit(() => {
+        const u = (p.updates || []).find((x) => x.id === id);
+        if (!u) return;
+        if (act === "private") {
+          u.private = !u.private;
+        } else if (act === "delete") {
+          if (!window.confirm("이 방송을 지울까...? (되돌릴 수 없어)")) return;
+          p.updates = p.updates.filter((x) => x.id !== id);
+          applySizes();
+        }
+        saveState();
+        renderFeed();
+        renderWall();
+      });
+    });
+    $("#feed-scroll").addEventListener("scroll", () => { $("#post-pop").hidden = true; }, { passive: true });
+
+    $("#lb-prev").addEventListener("click", () => { if (lb) { lb.fi--; renderLightbox(); } });
+    $("#lb-next").addEventListener("click", () => { if (lb) { lb.fi++; renderLightbox(); } });
+    $$('#lightbox [data-close="lightbox"]').forEach((b) => b.addEventListener("click", closeLightbox));
+    document.addEventListener("keydown", (e) => {
+      if (!lb) return;
+      if (e.key === "ArrowLeft") { lb.fi--; renderLightbox(); }
+      if (e.key === "ArrowRight") { lb.fi++; renderLightbox(); }
+    });
+  }
+
+  function openFromHash() {
+    const m = /#p=([^&]+)(?:&u=([^&]+))?/.exec(location.hash || "");
+    if (!m) return;
+    const pid = decodeURIComponent(m[1]);
+    const upId = m[2] ? decodeURIComponent(m[2]) : "";
+    if (!getProject(pid)) return;
+    openFeed(pid);
+    if (upId) requestAnimationFrame(() => scrollToPost(upId));
+  }
+
 
   /* —— recap —— */
   function rangeFor(period) {
@@ -1215,7 +1452,7 @@
       });
     }
     chart += "</svg>";
-    if (!points.length) chart = '<p class="zm-sub">이 기간엔 기분 기록이 없어.</p>';
+    if (!points.length) chart = '<p class="muted-note">이 기간엔 기분 기록이 없어.</p>';
 
     const byCh = {};
     rec.items.forEach((it) => {
@@ -1233,7 +1470,7 @@
           .join("   ");
         return '<div class="ch-mood-row"><strong>' + esc(name) + '</strong><div class="emojis">' + emojis + "</div></div>";
       })
-      .join("") || '<p class="zm-sub">아직 채널별 기록이 없어.</p>';
+      .join("") || '<p class="muted-note">아직 채널별 기록이 없어.</p>';
 
     const thumbs = rec.items
       .map((it) => {
@@ -1242,7 +1479,7 @@
           : '<div class="recap-ph"></div>';
         return "<figure>" + img + "<figcaption>" + esc(it.update.date.slice(5)) + " · " + esc(it.update.title) + "</figcaption></figure>";
       })
-      .join("") || '<p class="zm-sub">이 기간의 방송이 없어.</p>';
+      .join("") || '<p class="muted-note">이 기간의 방송이 없어.</p>';
 
     const todos = [];
     const seen = new Set();
@@ -1281,7 +1518,7 @@
   }
 
   function openRecap() {
-    if (currentId) closeZoom();
+    if (currentId) closeFeed();
     $("#recap-view").hidden = false;
     document.body.classList.remove("on-wall");
     setRail("recap");
@@ -1334,7 +1571,7 @@
     $("#oa-todo").value = p.nextTodo || "";
     $("#oa-private").checked = false;
     $("#oa-channel").innerHTML = (p.channels || [])
-      .map((c) => '<option value="' + esc(c.id) + '"' + (c.id === currentCh ? " selected" : "") + ">" + esc(c.name) + "</option>")
+      .map((c) => '<option value="' + esc(c.id) + '"' + (c.id === (currentCh || (lastUpdate(p) || {}).channelId) ? " selected" : "") + ">" + esc(c.name) + "</option>")
       .join("");
     $("#oa-moods").innerHTML = MOODS.map((m) =>
       '<button type="button" data-mood="' + m + '"' + (m === oaMood ? ' class="is-on"' : "") + ">" + m + "</button>"
@@ -1429,7 +1666,7 @@
   function goToSearch(id) {
     $("#search-results").hidden = true;
     closeRecap();
-    if (currentId) closeZoom();
+    if (currentId) closeFeed();
     const p = getProject(id);
     if (!p) return;
     document.body.classList.add("on-wall");
@@ -1439,7 +1676,7 @@
     flyToProject(p);
   }
 
-  /* —— trash / shelf —— */
+  /* —— trash —— */
   function renderTrash() {
     const body = $("#trash-body");
     const items = state.trash || [];
@@ -1463,25 +1700,7 @@
       .join("");
   }
 
-  function renderShelf() {
-    const p = getProject(currentId);
-    const body = $("#shelf-body");
-    if (!p) return;
-    body.innerHTML = (p.channels || [])
-      .map((ch) => {
-        const tapes = channelUpdates(p, ch.id)
-          .map((t) => {
-            const hidden = t.private && !unlocked;
-            return (
-              '<button type="button" class="vhs' + (t.id === currentUp ? " is-on" : "") + (hidden ? " is-priv" : "") + '" data-up="' + esc(t.id) + '">' +
-              '<span class="vhs-label"><em>' + esc(t.date.slice(5)) + "</em><b>" + esc(hidden ? "NO SIGNAL" : (t.title || "무제")) + "</b></span></button>"
-            );
-          })
-          .join("");
-        return '<div class="shelf-group"><h3>' + esc(ch.name) + "</h3><div class=\"shelf-tapes\">" + (tapes || "<span class=\"zm-sub\">빈 칸</span>") + "</div></div>";
-      })
-      .join("");
-  }
+
 
   /* —— mutations —— */
   function createProject() {
@@ -1508,7 +1727,7 @@
     renderCats();
     flyToProject(p);
     // Let the camera land on the new TV first, then zoom in (same flow as before).
-    setTimeout(() => { if (getProject(p.id)) openZoom(p.id); }, reducedMotion() ? 0 : 560);
+    setTimeout(() => { if (getProject(p.id)) openFeed(p.id); }, reducedMotion() ? 0 : 560);
   }
 
   function submitOnAir(e) {
@@ -1538,13 +1757,18 @@
     if (todo) p.nextTodo = todo;
     growProject(p);
     saveState();
-    currentCh = ch;
-    currentUp = update.id;
-    currentFile = 0;
+    if (currentCh && currentCh !== ch) currentCh = null;
+    newPostId = update.id;
     closeOnAir();
     playBroadcast(() => {
-      renderZoom();
+      renderFeed();
       renderWall();
+      $("#feed-scroll").scrollTop = 0;
+      setTimeout(() => {
+        newPostId = null;
+        const el = document.getElementById("post-" + update.id);
+        if (el) el.classList.remove("is-new");
+      }, 1400);
     });
   }
 
@@ -1553,7 +1777,7 @@
     const vp = $("#viewport");
 
     vp.addEventListener("wheel", (e) => {
-      if (!$("#zoom-view").hidden || !$("#recap-view").hidden) return;
+      if (!$("#feed-view").hidden || !$("#recap-view").hidden) return;
       e.preventDefault();
       const dy = e.deltaY || (e.deltaX ? e.deltaX : 0);
       const factor = Math.exp(-dy * 0.0015);
@@ -1572,7 +1796,7 @@
     }, { passive: false });
 
     vp.addEventListener("pointerdown", (e) => {
-      if (!$("#zoom-view").hidden) return;
+      if (!$("#feed-view").hidden) return;
       const tv = e.target.closest(".tv");
       if (tv && tv.dataset.id) {
         const p = getProject(tv.dataset.id);
@@ -1685,7 +1909,8 @@
       if (skipClick) return;
       const tv = e.target.closest(".tv");
       if (!tv) return;
-      if (tv.dataset.id) openZoom(tv.dataset.id);
+      const p = tv.dataset.id && getProject(tv.dataset.id);
+      if (p) flyIntoFeed(p);
     });
 
     vp.addEventListener("pointermove", (e) => {
@@ -1785,6 +2010,7 @@
       if (!e.target.closest(".search-box")) $("#search-results").hidden = true;
       if (!e.target.closest("#btn-menu") && !e.target.closest("#menu-pop")) $("#menu-pop").hidden = true;
       if (!e.target.closest("#btn-more-proj") && !e.target.closest("#proj-menu")) $("#proj-menu").hidden = true;
+      if (!e.target.closest("#post-pop")) $("#post-pop").hidden = true;
       if (!e.target.closest(".ws-title")) {
         const menu = $("#ws-cat-menu");
         if (menu) menu.hidden = true;
@@ -1803,7 +2029,7 @@
         pickRerun();
         $("#menu-pop").hidden = true;
         closeRecap();
-        if (currentId) closeZoom();
+        if (currentId) closeFeed();
         renderCats();
         renderWall();
         centerOnLatest(true);
@@ -1813,7 +2039,7 @@
       previewEmpty = true;
       $("#menu-pop").hidden = true;
       closeRecap();
-      if (currentId) closeZoom();
+      if (currentId) closeFeed();
       renderWall();
       centerOnLatest(false);
     });
@@ -1853,7 +2079,7 @@
       }
     });
 
-    $("#btn-back-wall").addEventListener("click", closeZoom);
+    $("#btn-back-wall").addEventListener("click", closeFeed);
     $("#btn-recap-back").addEventListener("click", closeRecap);
     $("#btn-onair").addEventListener("click", () => ensureEdit(openOnAir));
     $("#btn-complete").addEventListener("click", () => {
@@ -1862,7 +2088,7 @@
         if (!p) return;
         p.completed = !p.completed;
         saveState();
-        renderZoom();
+        renderFeed();
       });
     });
     $("#btn-more-proj").addEventListener("click", (e) => {
@@ -1877,7 +2103,7 @@
         if (name != null && name.trim()) {
           p.name = name.trim();
           saveState();
-          renderZoom();
+          renderFeed();
         }
         $("#proj-menu").hidden = true;
       });
@@ -1888,7 +2114,7 @@
         if (!p) return;
         p.private = !p.private;
         saveState();
-        renderZoom();
+        renderFeed();
         $("#proj-menu").hidden = true;
       });
     });
@@ -1902,80 +2128,24 @@
         state.trash.push(copy);
         saveState();
         $("#proj-menu").hidden = true;
-        closeZoom();
+        closeFeed();
       });
     });
 
-    $("#channel-tabs").addEventListener("click", (e) => {
-      if (e.target.id === "btn-add-ch") {
-        ensureEdit(() => {
-          const p = getProject(currentId);
-          if (!p) return;
-          const name = window.prompt("채널 이름", "");
-          if (!name || !name.trim()) return;
-          const ch = { id: uid("ch"), name: name.trim() };
-          p.channels.push(ch);
-          currentCh = ch.id;
-          saveState();
-          renderZoom();
-        });
-        return;
-      }
-      const tab = e.target.closest(".ch-tab[data-ch]");
-      if (!tab) return;
-      currentCh = tab.getAttribute("data-ch");
-      const p = getProject(currentId);
-      const first = channelUpdates(p, currentCh)[0];
-      currentUp = first ? first.id : null;
-      currentFile = 0;
-      renderZoom();
-    });
-    $("#vhs-row").addEventListener("click", (e) => {
-      const tape = e.target.closest(".vhs[data-up]");
-      if (!tape) return;
-      currentUp = tape.getAttribute("data-up");
-      currentFile = 0;
-      const p = getProject(currentId);
-      const u = currentUpdate(p);
-      if (u) currentCh = u.channelId;
-      renderZoom();
-    });
-    $("#file-slots").addEventListener("click", (e) => {
-      const slot = e.target.closest("[data-fi]");
-      if (!slot) return;
-      currentFile = Number(slot.getAttribute("data-fi"));
-      renderZoom();
-    });
-    $("#btn-prev-file").addEventListener("click", () => {
-      const p = getProject(currentId);
-      const u = currentUpdate(p);
-      const n = u && u.files ? u.files.length : 0;
-      if (n < 2) return;
-      currentFile = (currentFile + n - 1) % n;
-      renderZoom();
-    });
-    $("#btn-next-file").addEventListener("click", () => {
-      const p = getProject(currentId);
-      const u = currentUpdate(p);
-      const n = u && u.files ? u.files.length : 0;
-      if (n < 2) return;
-      currentFile = (currentFile + 1) % n;
-      renderZoom();
-    });
-    $("#btn-shelf").addEventListener("click", () => {
-      renderShelf();
-      $("#shelf-view").hidden = false;
-    });
-    $("#shelf-body").addEventListener("click", (e) => {
-      const tape = e.target.closest(".vhs[data-up]");
-      if (!tape) return;
-      currentUp = tape.getAttribute("data-up");
-      const p = getProject(currentId);
-      const u = currentUpdate(p);
-      if (u) currentCh = u.channelId;
-      currentFile = 0;
-      $("#shelf-view").hidden = true;
-      renderZoom();
+    $("#btn-add-ch").addEventListener("click", () => {
+      $("#proj-menu").hidden = true;
+      ensureEdit(() => {
+        const p = getProject(currentId);
+        if (!p) return;
+        const name = window.prompt("채널 이름", "");
+        if (!name || !name.trim()) return;
+        const ch = { id: uid("ch"), name: name.trim() };
+        p.channels = p.channels || [];
+        p.channels.push(ch);
+        currentCh = ch.id;
+        saveState();
+        renderFeed();
+      });
     });
 
     $("#onair-form").addEventListener("submit", submitOnAir);
@@ -2001,7 +2171,6 @@
         const which = el.getAttribute("data-close");
         if (which === "onair") closeOnAir();
         if (which === "pass") closePass();
-        if (which === "shelf") $("#shelf-view").hidden = true;
         if (which === "trash") { $("#trash-view").hidden = true; syncRail(); }
         if (which === "cat") $("#cat-view").hidden = true;
       });
@@ -2016,7 +2185,7 @@
         const fn = pendingEdit;
         pendingEdit = null;
         renderWall();
-        if (currentId) renderZoom();
+        if (currentId) renderFeed();
         if (fn) fn();
       } else {
         $("#pass-err").hidden = false;
@@ -2035,11 +2204,13 @@
       if (e.key !== "Escape") return;
       if (!$("#pass-view").hidden) return closePass();
       if (!$("#onair-view").hidden) return closeOnAir();
-      if (!$("#shelf-view").hidden) return ($("#shelf-view").hidden = true);
+      if (!$("#lightbox").hidden) return closeLightbox();
+      if (!$("#post-pop").hidden) return ($("#post-pop").hidden = true);
+      if (!$("#proj-menu").hidden) return ($("#proj-menu").hidden = true);
       if (!$("#trash-view").hidden) { $("#trash-view").hidden = true; syncRail(); return; }
       if (!$("#cat-view").hidden) return ($("#cat-view").hidden = true);
       if (!$("#recap-view").hidden) return closeRecap();
-      if (!$("#zoom-view").hidden) return closeZoom();
+      if (!$("#feed-view").hidden) return closeFeed();
     });
 
     function bindSidebar() {
@@ -2049,7 +2220,7 @@
           if (name === "home") {
             previewEmpty = false;
             closeRecap();
-            if (currentId) closeZoom();
+            if (currentId) closeFeed();
             $("#trash-view").hidden = true;
             setActiveCat("__all");
             centerOnLatest(true);
@@ -2077,7 +2248,7 @@
       if (logo) logo.addEventListener("click", function () {
         previewEmpty = false;
         closeRecap();
-        if (currentId) closeZoom();
+        if (currentId) closeFeed();
         $("#trash-view").hidden = true;
         setActiveCat("__all");
         centerOnLatest(true);
@@ -2134,7 +2305,7 @@
         const ch = e.target.closest(".tree-row.channel[data-ch]");
         if (ch) {
           const p = getProject(ch.getAttribute("data-pid"));
-          if (p) openZoom(p.id, ch.getAttribute("data-ch"));
+          if (p) openFeed(p.id, ch.getAttribute("data-ch"));
           return;
         }
         const proj = e.target.closest(".tree-row.project[data-pid]");
@@ -2142,18 +2313,8 @@
           const id = proj.getAttribute("data-pid");
           const p = getProject(id);
           if (!p) return;
-          const now = Date.now();
-          if (projClickId === id && now - projClickAt < 450) {
-            projClickId = "";
-            openZoom(p.id);
-            return;
-          }
-          projClickId = id;
-          projClickAt = now;
           closeRecap();
-          if (currentId) closeZoom();
-          document.body.classList.add("on-wall");
-          focusProject(p);
+          openFeed(p.id);
           return;
         }
         const folder = e.target.closest(".tree-row.folder");
@@ -2169,12 +2330,6 @@
           }
         }
       });
-      $("#side-tree").addEventListener("dblclick", function (e) {
-        const proj = e.target.closest(".tree-row.project[data-pid]");
-        if (!proj) return;
-        const p = getProject(proj.getAttribute("data-pid"));
-        if (p) openZoom(p.id);
-      });
     }
     bindSidebar();
 
@@ -2183,7 +2338,7 @@
 
   function startAmbience() {
     setInterval(() => {
-      if (!$("#zoom-view").hidden) return;
+      if (!$("#feed-view").hidden) return;
       const tvs = $$("#wall .tv[data-id]");
       if (!tvs.length) return;
       const el = tvs[Math.floor(Math.random() * tvs.length)];
@@ -2192,7 +2347,7 @@
     }, 9000);
     setInterval(() => {
       $$(".tv-mood-face").forEach((n) => n.remove());
-      if (!$("#zoom-view").hidden) return;
+      if (!$("#feed-view").hidden) return;
       const cands = projects().filter((p) => !(p.private && !unlocked) && latestMood(p));
       if (!cands.length) return;
       const p = cands[Math.floor(Math.random() * cands.length)];
@@ -2211,17 +2366,17 @@
       unlocked = true;
       localStorage.setItem(AUTH_KEY, "1");
     },
-    openProject: function (id) { openZoom(id); },
+    openProject: function (id) { openFeed(id); },
     openRecap: openRecap,
     openOnAir: function () {
-      if (!currentId) openZoom("p-poster");
+      if (!currentId) openFeed("p-poster");
       unlocked = true;
       openOnAir();
     },
     showEmpty: function () {
       previewEmpty = true;
       closeRecap();
-      if (currentId) closeZoom();
+      if (currentId) closeFeed();
       renderWall();
       renderCats();
       centerOnLatest(false);
@@ -2267,10 +2422,12 @@
     document.body.classList.add("on-wall");
     if (sidebarCollapsed) $("#app").classList.add("sidebar-collapsed");
     bindEvents();
+    bindFeed();
     renderCats();
     renderWall();
     centerOnLatest(false);
     startAmbience();
+    openFromHash();
   }
 
   init();
