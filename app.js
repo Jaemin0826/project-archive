@@ -154,7 +154,6 @@
         const parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.projects)) {
           state = parsed;
-          if (!state.recap) state.recap = { x: 2, y: 0 };
           if (!state.categories) state.categories = clone(TV_SEED.categories);
           if (!state.trash) state.trash = [];
           return;
@@ -202,9 +201,6 @@
         for (let x = 0; x < p.w; x++) set.add(p.x + x + "," + (p.y + y));
       }
     });
-    if (projects().length && !(exceptId === "__recap")) {
-      set.add(state.recap.x + "," + state.recap.y);
-    }
     return set;
   }
 
@@ -229,6 +225,29 @@
       }
     }
     return { x: maxX + 1, y: minY };
+  }
+
+  // Free cell closest to what the user is looking at (camera centre), so the
+  // new TV appears near the current view rather than at a far grid corner.
+  function nearestFreeCell(w, h) {
+    const occ = occupiedSet();
+    if (!projects().length) return { x: 0, y: 0 };
+    const cx = Math.floor(camera.cx / CELL_W + GRID_MIN);
+    const cy = Math.floor(camera.cy / CELL_H + GRID_MIN);
+    const fits = (x, y) => {
+      for (let dy = 0; dy < h; dy++) for (let dx = 0; dx < w; dx++)
+        if (occ.has(x + dx + "," + (y + dy))) return false;
+      return true;
+    };
+    for (let r = 0; r < 40; r++) {
+      const ring = [];
+      for (let x = -r; x <= r; x++) for (let y = -r; y <= r; y++)
+        if (Math.max(Math.abs(x), Math.abs(y)) === r) ring.push({ x: cx + x, y: cy + y });
+      ring.sort((a, b) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(b.x - cx, b.y - cy) || a.y - b.y || a.x - b.x);
+      const hit = ring.find(c => fits(c.x, c.y));
+      if (hit) return hit;
+    }
+    return findEmpty(w, h);
   }
 
   function rectsOverlap(a, b) {
@@ -263,8 +282,7 @@
     const moved = { id: p.id, x: nx, y: ny, w: p.w, h: p.h };
     const others = projects().filter(o => o.id !== p.id)
       .map(o => ({ id: o.id, x: o.x, y: o.y, w: o.w, h: o.h }));
-    const rec = { id: "__recap", x: state.recap.x, y: state.recap.y, w: 1, h: 1 };
-    const all = others.concat(projects().length ? [rec] : []);
+    const all = others;
     // Only TVs directly covered by the destination may move. Never recursively
     // push stationary neighbors, or mutate the real layout while previewing.
     const displaced = all.filter(o => rectsOverlap(moved, o));
@@ -298,7 +316,7 @@
         break;
       }
     });
-    return { nx, ny, others, rec };
+    return { nx, ny, others };
   }
 
   function commitMove(p, plan) {
@@ -308,8 +326,6 @@
       const actual = getProject(o.id);
       if (actual) { actual.x = o.x; actual.y = o.y; }
     });
-    state.recap.x = plan.rec.x;
-    state.recap.y = plan.rec.y;
   }
 
   function applyDragPreview(p, nx, ny) {
@@ -357,14 +373,6 @@
       el.style.left = pos.x + "px";
       el.style.top = pos.y + "px";
     });
-    const recEl = $('#wall .tv[data-special="recap"]');
-    if (recEl) {
-      const movedRec = sim.rec.x !== state.recap.x || sim.rec.y !== state.recap.y;
-      recEl.classList.toggle("is-previewing", movedRec);
-      const pos = cellToLocal(sim.rec.x, sim.rec.y);
-      recEl.style.left = pos.x + "px";
-      recEl.style.top = pos.y + "px";
-    }
   }
 
   function clearDragPreview() {
@@ -515,10 +523,6 @@
       body = '<div class="tv-nosignal"><span>NO SIGNAL</span></div>';
     } else if (opts.kind === "ended") {
       body = '<div class="tv-bars"></div>';
-    } else if (opts.kind === "plus") {
-      body = '<div class="tv-plus-mark">+</div>';
-    } else if (opts.kind === "recap") {
-      body = '<div class="tv-recap-art"><div class="recap-word">RECAP</div></div>';
     } else {
       const img = opts.src
         ? '<img class="tv-thumb" alt="" src="' + esc(opts.src) + '" />'
@@ -589,42 +593,14 @@
       wall.appendChild(el);
     });
 
-    if (list.length) {
-      const loc = cellToLocal(state.recap.x, state.recap.y);
-      const rec = document.createElement("div");
-      rec.className = "tv size-1x1 tv-special";
-      rec.dataset.special = "recap";
-      rec.style.left = loc.x + "px";
-      rec.style.top = loc.y + "px";
-      rec.style.width = CELL_W - GAP + "px";
-      rec.style.height = CELL_H - GAP + "px";
-      rec.innerHTML = tvScreenHTML({
-        kind: "recap",
-        name: "주간 특집",
-        badge: "특집",
-      });
-      wall.appendChild(rec);
-    }
-
-    const plusAt = findEmpty(1, 1);
-    const ploc = cellToLocal(plusAt.x, plusAt.y);
-    const plus = document.createElement("div");
-    plus.className = "tv size-1x1 state-offline tv-special";
-    plus.dataset.special = "plus";
-    plus.dataset.x = String(plusAt.x);
-    plus.dataset.y = String(plusAt.y);
-    plus.style.left = ploc.x + "px";
-    plus.style.top = ploc.y + "px";
-    plus.style.width = CELL_W - GAP + "px";
-    plus.style.height = CELL_H - GAP + "px";
-    plus.innerHTML = tvScreenHTML({ kind: "plus", badge: "OFFLINE", name: "", dot: "gray" });
-    wall.appendChild(plus);
-
     if (!list.length) {
       const wrap = document.createElement("div");
-      wrap.className = "mascot-wrap";
-      wrap.style.left = ploc.x + CELL_W - 8 + "px";
-      wrap.style.top = ploc.y + 28 + "px";
+      // Empty state: centered on the camera focus (cell 0,0 centre); points to the
+      // floating "+ 새 프로젝트" button instead of a clickable "+" TV.
+      const c = cellToLocal(0.5, 0.5);
+      wrap.className = "mascot-wrap is-empty";
+      wrap.style.left = c.x + "px";
+      wrap.style.top = c.y + "px";
       wrap.innerHTML =
         '<svg class="mascot-blob" viewBox="0 0 64 56" xmlns="http://www.w3.org/2000/svg">' +
         '<ellipse cx="32" cy="30" rx="22" ry="18" fill="#3a3a40"/>' +
@@ -637,9 +613,10 @@
         '<circle cx="46" cy="10" r="3.5" fill="#5a5a62"/>' +
         '<rect x="45" y="2" width="2" height="8" rx="1" fill="#6a6a72"/>' +
         "</svg>" +
-        '<div class="mascot-speech">첫 방송을 시작해볼까...?</div>';
+        '<div class="mascot-speech">첫 방송을 시작해볼까...?<span class="mascot-hint">오른쪽 아래 <b>+ 새 프로젝트</b>를 눌러봐 ↘</span></div>';
       wall.appendChild(wrap);
     }
+    document.body.classList.toggle("is-empty-wall", !list.length);
 
     renderMinimap();
   }
@@ -842,11 +819,6 @@
       maxX = Math.max(maxX, b.x);
       maxY = Math.max(maxY, b.y);
     });
-    const rec = cellToLocal(state.recap.x, state.recap.y);
-    minX = Math.min(minX, rec.x);
-    minY = Math.min(minY, rec.y);
-    maxX = Math.max(maxX, rec.x + CELL_W);
-    maxY = Math.max(maxY, rec.y + CELL_H);
     const pad = CELL_W;
     return { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
   }
@@ -891,11 +863,6 @@
       ctx.fillStyle = colors[vs.key] || "#444";
       ctx.fillRect(loc.x * scale + ox, loc.y * scale + oy, (p.w * CELL_W - GAP) * scale, (p.h * CELL_H - GAP) * scale);
     });
-    if (projects().length) {
-      const loc = cellToLocal(state.recap.x, state.recap.y);
-      ctx.fillStyle = "#4a4a4a";
-      ctx.fillRect(loc.x * scale + ox, loc.y * scale + oy, (CELL_W - GAP) * scale, (CELL_H - GAP) * scale);
-    }
     const vp = $("#viewport");
     if (vp) {
       const o = viewOrigin();
@@ -1522,7 +1489,7 @@
       previewEmpty = false;
     }
     applySizes();
-    const pos = findEmpty(1, 1);
+    const pos = nearestFreeCell(1, 1);
     const p = {
       id: uid("p"),
       name: "더미 프로젝트",
@@ -1540,7 +1507,8 @@
     renderWall();
     renderCats();
     flyToProject(p);
-    openZoom(p.id);
+    // Let the camera land on the new TV first, then zoom in (same flow as before).
+    setTimeout(() => { if (getProject(p.id)) openZoom(p.id); }, reducedMotion() ? 0 : 560);
   }
 
   function submitOnAir(e) {
@@ -1717,14 +1685,6 @@
       if (skipClick) return;
       const tv = e.target.closest(".tv");
       if (!tv) return;
-      if (tv.dataset.special === "plus") {
-        ensureEdit(createProject);
-        return;
-      }
-      if (tv.dataset.special === "recap") {
-        openRecap();
-        return;
-      }
       if (tv.dataset.id) openZoom(tv.dataset.id);
     });
 
@@ -1753,6 +1713,7 @@
     });
     vp.addEventListener("pointerleave", () => { $("#tooltip").hidden = true; });
 
+    $("#btn-new-project").addEventListener("click", () => ensureEdit(createProject));
     $("#btn-zoom-in").addEventListener("click", () => {
       camera.scale = Math.min(SCALE_MAX, camera.scale * 1.18);
       applyCamera();

@@ -67,7 +67,6 @@
 
   window.TV_SEED = {
     categories: ["이미지", "영상", "3D", "사갈"],
-    recap: { x: 5, y: 0 },
     projects: [
       {
         id: "p-star",
