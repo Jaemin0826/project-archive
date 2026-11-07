@@ -636,22 +636,21 @@ body.cats-editing .chip:not([data-cat="__all"]) .cat-x { display: inline-flex; }
   top: 50%;
   width: var(--ripple-w);
   height: var(--ripple-h);
-  border: 2px solid rgba(220, 220, 220, 0.4);
-  border-radius: 18px;
-  box-shadow: 0 0 22px rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  background: radial-gradient(ellipse at center, rgba(230, 230, 230, 0.22) 0%, rgba(230, 230, 230, 0.12) 55%, rgba(230, 230, 230, 0) 100%);
   transform: translate(-50%, -50%) scale(0.62);
   opacity: 0;
-  animation: tv-ripple 720ms ease-out forwards;
+  animation: tv-ripple 760ms ease-out forwards;
 }
 .tv-ripple i:nth-child(2) {
-  animation-delay: 110ms;
-  border-color: rgba(210, 210, 210, 0.26);
-  border-radius: 22px;
+  animation-delay: 120ms;
+  border-radius: 24px;
+  background: radial-gradient(ellipse at center, rgba(220, 220, 220, 0.14) 0%, rgba(220, 220, 220, 0.06) 60%, rgba(220, 220, 220, 0) 100%);
 }
 @keyframes tv-ripple {
-  0% { transform: translate(-50%, -50%) scale(0.58); opacity: 0.5; }
-  32% { opacity: 0.32; }
-  100% { transform: translate(-50%, -50%) scale(1.85); opacity: 0; }
+  0% { transform: translate(-50%, -50%) scale(0.6); opacity: 0.9; }
+  35% { opacity: 0.6; }
+  100% { transform: translate(-50%, -50%) scale(1.8); opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
