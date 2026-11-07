@@ -1585,7 +1585,7 @@ body:not(.on-wall) .hud-br { display: none; }
 .feed-empty .mascot-blob { width: 84px; height: 74px; }
 .feed-empty-text { margin: 0; color: #cfcfcf; font-size: 15px; }
 
-.post-pop { min-width: 160px; z-index: 30; }
+.post-pop { right: auto; bottom: auto; width: max-content; min-width: 160px; max-width: 240px; z-index: 30; }
 .mood-pick { display: flex; gap: 2px; }
 .post-pop .mood-pick button { width: 34px; padding: 6px 0; text-align: center; font-size: 17px; }
 .post-pop .mood-pick button.is-on { background: #3a3a3a; }
