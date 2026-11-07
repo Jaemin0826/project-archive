@@ -235,27 +235,9 @@
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
 
-  function resolveCollisions(moved, dir, depth) {
-    if (depth > 14) return;
-    applySizes();
-    projects().forEach((o) => {
-      if (o === moved) return;
-      if (!rectsOverlap(moved, o)) return;
-      if (dir === "left") o.x = moved.x - o.w;
-      else if (dir === "up") o.y = moved.y - o.h;
-      else if (dir === "down") o.y = moved.y + moved.h;
-      else o.x = moved.x + moved.w;
-      resolveCollisions(o, dir, depth + 1);
-    });
-    if (projects().length) {
-      const rec = { x: state.recap.x, y: state.recap.y, w: 1, h: 1 };
-      if (moved.id !== "__recap" && rectsOverlap(moved, rec)) {
-        if (dir === "left") state.recap.x = moved.x - 1;
-        else if (dir === "up") state.recap.y = moved.y - 1;
-        else if (dir === "down") state.recap.y = moved.y + moved.h;
-        else state.recap.x = moved.x + moved.w;
-      }
-    }
+  // Growth and drag both use the same non-recursive nearest-free-cell planner.
+  function resolveCollisions(moved) {
+    commitMove(moved, simulateMove(moved, moved.x, moved.y));
   }
 
   function growProject(p) {
@@ -277,33 +259,57 @@
   }
 
   function simulateMove(p, nx, ny) {
-    const dirX = nx - p.x;
-    const dirY = ny - p.y;
-    const dir = Math.abs(dirX) >= Math.abs(dirY) ? (dirX < 0 ? "left" : "right") : (dirY < 0 ? "up" : "down");
-    const others = projects()
-      .filter(function (o) { return o.id !== p.id; })
-      .map(function (o) { return { id: o.id, x: o.x, y: o.y, w: o.w, h: o.h }; });
+    applySizes();
     const moved = { id: p.id, x: nx, y: ny, w: p.w, h: p.h };
-    const rec = { x: state.recap.x, y: state.recap.y, w: 1, h: 1 };
-    function resolve(m, d, depth) {
-      if (depth > 14) return;
-      others.forEach(function (o) {
-        if (!rectsOverlap(m, o)) return;
-        if (d === "left") o.x = m.x - o.w;
-        else if (d === "up") o.y = m.y - o.h;
-        else if (d === "down") o.y = m.y + m.h;
-        else o.x = m.x + m.w;
-        resolve(o, d, depth + 1);
-      });
-      if (rectsOverlap(m, rec)) {
-        if (d === "left") rec.x = m.x - 1;
-        else if (d === "up") rec.y = m.y - 1;
-        else if (d === "down") rec.y = m.y + m.h;
-        else rec.x = m.x + m.w;
+    const others = projects().filter(o => o.id !== p.id)
+      .map(o => ({ id: o.id, x: o.x, y: o.y, w: o.w, h: o.h }));
+    const rec = { id: "__recap", x: state.recap.x, y: state.recap.y, w: 1, h: 1 };
+    const all = others.concat(projects().length ? [rec] : []);
+    // Only TVs directly covered by the destination may move. Never recursively
+    // push stationary neighbors, or mutate the real layout while previewing.
+    const displaced = all.filter(o => rectsOverlap(moved, o));
+    const fixed = [moved].concat(all.filter(o => !rectsOverlap(moved, o)));
+    const source = { x: p.x, y: p.y, w: p.w, h: p.h };
+    const dx = Math.sign(p.x - nx), dy = Math.sign(p.y - ny);
+    displaced.sort((a, b) => b.w * b.h - a.w * a.h || a.id.localeCompare(b.id));
+    displaced.forEach(o => {
+      const ox = o.x, oy = o.y;
+      // Manhattan-distance shells guarantee minimal displacement. For equally
+      // near cells prefer the vacated source, then the incoming side.
+      for (let radius = 1; ; radius++) {
+        const candidates = [];
+        for (let x = -radius; x <= radius; x++) {
+          const y = radius - Math.abs(x);
+          candidates.push({ x: ox + x, y: oy + y, w: o.w, h: o.h });
+          if (y) candidates.push({ x: ox + x, y: oy - y, w: o.w, h: o.h });
+        }
+        const free = candidates.filter(c => !fixed.some(f => rectsOverlap(c, f)));
+        if (!free.length) continue;
+        free.sort((a, b) => {
+          const aSource = rectsOverlap(a, source) ? 1 : 0;
+          const bSource = rectsOverlap(b, source) ? 1 : 0;
+          return bSource - aSource ||
+            ((b.x - ox) * dx + (b.y - oy) * dy) - ((a.x - ox) * dx + (a.y - oy) * dy) ||
+            a.y - b.y || a.x - b.x;
+        });
+        o.x = free[0].x;
+        o.y = free[0].y;
+        fixed.push(o);
+        break;
       }
-    }
-    resolve(moved, dir, 0);
-    return { nx: moved.x, ny: moved.y, others: others, rec: rec, dir: dir };
+    });
+    return { nx, ny, others, rec };
+  }
+
+  function commitMove(p, plan) {
+    p.x = plan.nx;
+    p.y = plan.ny;
+    plan.others.forEach(o => {
+      const actual = getProject(o.id);
+      if (actual) { actual.x = o.x; actual.y = o.y; }
+    });
+    state.recap.x = plan.rec.x;
+    state.recap.y = plan.rec.y;
   }
 
   function applyDragPreview(p, nx, ny) {
@@ -329,6 +335,7 @@
       slot.style.height = h + "px";
     }
     const sim = simulateMove(p, nx, ny);
+    if (drag && drag.id === p.id) drag.plan = sim;
     const seen = {};
     sim.others.forEach(function (o) {
       seen[o.id] = true;
@@ -463,11 +470,15 @@
     }
   }
 
+  let cameraAnimation = 0;
+
   function animateCamera(tx, ty, ts) {
+    const animation = ++cameraAnimation;
     const sx = camera.cx, sy = camera.cy, ss = camera.scale;
     const t0 = performance.now();
     const dur = 520;
     function step(now) {
+      if (animation !== cameraAnimation) return;
       const t = Math.min(1, (now - t0) / dur);
       const e = 1 - Math.pow(1 - t, 3);
       camera.cx = sx + (tx - sx) * e;
@@ -480,11 +491,14 @@
   }
 
   function worldFromEvent(e) {
-    const r = $("#viewport").getBoundingClientRect();
-    const o = viewOrigin();
+    // Read the rendered wall matrix rather than assuming the viewport starts
+    // at (0, 0). Its bounds include sidebar offsets, translations and origin.
+    const wall = $("#wall");
+    const rect = wall.getBoundingClientRect();
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(wall).transform);
     return {
-      x: camera.cx + (e.clientX - r.left - o.x) / camera.scale,
-      y: camera.cy + (e.clientY - r.top - o.y) / camera.scale,
+      x: (e.clientX - rect.left) / matrix.a,
+      y: (e.clientY - rect.top) / matrix.d,
     };
   }
 
@@ -1578,9 +1592,13 @@
       const next = Math.min(SCALE_MAX, Math.max(SCALE_MIN, camera.scale * factor));
       if (next === camera.scale) return;
       const world = worldFromEvent(e);
-      const k = next / camera.scale;
-      camera.cx = world.x - (world.x - camera.cx) * k;
-      camera.cy = world.y - (world.y - camera.cy) * k;
+      const rect = vp.getBoundingClientRect();
+      const origin = viewOrigin();
+      cameraAnimation++;
+      // screen = viewportOffset + origin + scale * (world - camera).
+      // Solve for the NEW camera, dividing by the NEW scale (not multiplying).
+      camera.cx = world.x - (e.clientX - rect.left - origin.x) / next;
+      camera.cy = world.y - (e.clientY - rect.top - origin.y) / next;
       camera.scale = next;
       applyCamera();
     }, { passive: false });
@@ -1664,21 +1682,15 @@
           const el = $('#wall .tv[data-id="' + info.id + '"]');
           if (el) el.classList.remove("is-dragging");
           clearDragPreview();
-          if (p) {
+          if (p && e.type !== "pointercancel") {
             const world = worldFromEvent(e);
-            const tlx = world.x - info.ox;
-            const tly = world.y - info.oy;
-            const nx = Math.round(tlx / CELL_W + GRID_MIN);
-            const ny = Math.round(tly / CELL_H + GRID_MIN);
-            const dirX = nx - p.x;
-            const dirY = ny - p.y;
-            const dir = Math.abs(dirX) >= Math.abs(dirY) ? (dirX < 0 ? "left" : "right") : (dirY < 0 ? "up" : "down");
-            p.x = nx;
-            p.y = ny;
-            resolveCollisions(p, dir, 0);
+            const snap = snapCellFromPixels(world.x - info.ox, world.y - info.oy);
+            const plan = info.plan && info.plan.nx === snap.x && info.plan.ny === snap.y
+              ? info.plan : simulateMove(p, snap.x, snap.y);
+            commitMove(p, plan);
             saveState();
-            renderWall();
           }
+          renderWall();
         }
         setTimeout(() => { skipClick = false; }, 40);
       }
