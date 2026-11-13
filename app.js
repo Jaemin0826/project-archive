@@ -1754,8 +1754,9 @@
     $("#onair-view").hidden = true;
   }
 
-  function playBroadcast(done) {
+  function playBroadcast(done, label) {
     const fx = $("#broadcast-fx");
+    $(".fx-onair", fx).innerHTML = "<span></span> " + esc(label || "ON AIR");
     fx.hidden = false;
     fx.className = "broadcast-fx show-light";
     setTimeout(() => {
@@ -1873,7 +1874,7 @@
 
 
   /* —— mutations —— */
-  function createProject() {
+  function createProject(opts) {
     if (previewEmpty) {
       previewEmpty = false;
     }
@@ -1895,6 +1896,7 @@
     saveState();
     renderWall();
     renderCats();
+    if (opts && opts.silent) return p;
     flyToProject(p);
     // Let the camera land on the new TV first, then zoom in (same flow as before).
     setTimeout(() => { if (getProject(p.id)) openFeed(p.id); }, reducedMotion() ? 0 : 560);
@@ -2376,6 +2378,7 @@
       if (e.key !== "Escape") return;
       if (!$("#pass-view").hidden) return closePass();
       if (!$("#onair-view").hidden) return closeOnAir();
+      if (!$("#work-view").hidden) return; // 작업 메이트 handles its own keys
       if (!$("#lightbox").hidden) return closeLightbox();
       if (menuOpenId) return closePostMenu();
       if (!$("#proj-menu").hidden) return ($("#proj-menu").hidden = true);
@@ -2532,6 +2535,41 @@
       setTimeout(() => face.remove(), 3200);
     }, 15000);
   }
+
+  /* Small surface for work.js (작업 메이트). */
+  window.TVArchiveCore = {
+    projects: function () { return state.projects.slice(); },
+    getProject: getProject,
+    latestProjectId: function () {
+      const list = state.projects.slice().sort((a, b) => (lastDate(a) < lastDate(b) ? 1 : -1));
+      return list[0] ? list[0].id : "";
+    },
+    focusedProjectId: function () { return currentId || focusedId || ""; },
+    playBroadcast: playBroadcast,
+    mascotSVG: function () { return MASCOT_SVG; },
+    // close the feed/recap so the work page opens over a clean wall
+    clearOverlays: function () {
+      closeRecap();
+      if (currentId) closeFeed();
+    },
+    // 작업 끝내기 → "업데이트로 올리기": open that project's feed and a prefilled ON AIR form
+    postWorkSession: function (pid, fields) {
+      ensureEdit(function () {
+        let p = pid && getProject(pid);
+        if (!p) p = createProject({ silent: true });
+        openFeed(p.id);
+        openOnAir();
+        $("#oa-title").value = fields.title || "";
+        $("#oa-desc").value = fields.description || "";
+        if (fields.nextTodo != null) $("#oa-todo").value = fields.nextTodo;
+        if (fields.mood) {
+          oaMood = fields.mood;
+          $$("#oa-moods button").forEach((x) => x.classList.toggle("is-on", x.getAttribute("data-mood") === oaMood));
+        }
+        $("#oa-title").focus();
+      });
+    },
+  };
 
   window.TVArchive = {
     unlock: function () {
