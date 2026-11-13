@@ -309,6 +309,7 @@
   (function enrich(seed) {
     const counts = [2, 1, 3, 4, 2, 1, 2, 3];
     const labels = ["시안 A", "시안 B", "디테일", "비교컷"];
+    const commentPool = ["오 이거 분위기 좋다", "다음 방송 기다릴게요", "색감 너무 좋아요!", "이건 진짜 저장각"];
     const todos = ["여백 한 번 더 보기", "색 대비 체크", "피드백 정리해서 반영", "다음 컷 러프 잡기"];
     seed.projects.forEach(function (p) {
       const ups = (p.updates || []).slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; });
@@ -321,6 +322,14 @@
             u.files.push({ type: "image", src: "", name: n === 1 ? (files[0].name || "") : labels[k] });
           }
         }
+        // mock social counts for the feed (heart / comments)
+        const h = (u.id.length * 7 + i * 3 + p.id.length) % 9;
+        u.likes = h;
+        u.liked = false;
+        u.comments = i % 3 === 0
+          ? [{ name: "지나가던 시청자", text: commentPool[(h + i) % commentPool.length] }].concat(i === 0 ? [{ name: "재민", text: "고마워... 다음 편도 곧 올릴게" }] : [])
+          : [];
+        (u.files || []).forEach(function (f) { if (f.type === "video" && !f.duration) f.duration = 12 + (h % 4) * 9; });
         if (!u.nextTodo && i < 2 && !p.completed) u.nextTodo = i === 0 && p.nextTodo ? p.nextTodo : todos[(i + p.id.length) % todos.length];
       });
     });

@@ -10,7 +10,7 @@
   const SCALE_MAX = 1.75;
   const DEFAULT_SCALE = 1;
   const AUTH_KEY = "tv-archive-unlocked";
-  const DATA_KEY = "tv-archive-data-v4";
+  const DATA_KEY = "tv-archive-data-v5";
   const SIDEBAR_KEY = "tv-archive-sidebar-collapsed";
   const PASSWORD = "0000";
   const MOODS = ["😊", "😐", "😵", "🔥", "✨", "😢"];
@@ -986,23 +986,22 @@
       });
   }
 
-  /* line icons (stroke = currentColor) */
+  /* feed assets (downloaded from the Figma design into assets/feed) */
+  const FA = "assets/feed/";
   const ICON = {
-    more: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="1.3"/><circle cx="10" cy="10" r="1.3"/><circle cx="15" cy="10" r="1.3"/></svg>',
-    todo: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.5l1.4 1.4L8 4.3M4 11.5l1.4 1.4L8 10.3M10.5 5.8H16M10.5 11.8H16M4.5 16.5H16"/></svg>',
-    link: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.4 11.6a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-.9.9M11.6 8.4a3 3 0 0 0-4.2 0L4.8 11a3 3 0 0 0 4.2 4.2l.9-.9"/></svg>',
-    up: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 12.5L10 8l4.5 4.5"/></svg>',
-    down: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 7.5L10 12l4.5-4.5"/></svg>',
     play: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 5.5v9l7-4.5z"/></svg>',
     cube: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3l6 3.3v7.4L10 17l-6-3.3V6.3zM4 6.3l6 3.4 6-3.4M10 9.7V17"/></svg>',
   };
+  function asset(name, w, h, cls) {
+    return '<img class="' + (cls || "") + '" alt="" src="' + FA + name + '" width="' + w + '" height="' + h + '" />';
+  }
 
   let newPostId = null;
   let todoOpen = {};
-
-  function fmtSlash(d) {
-    return String(d || "").replace(/-/g, "/");
-  }
+  let commentsOpen = {};
+  let menuOpenId = null;
+  let menuMode = "main";
+  const mockVideo = {}; // "updateId:fileIndex" -> { t, timer }
 
   function channelName(p, chId) {
     const ch = (p.channels || []).find((c) => c.id === chId);
@@ -1013,85 +1012,167 @@
     return !!src && (/^data:video/.test(src) || /\.(mp4|webm|ogg|mov)(\?|$)/i.test(src));
   }
 
-  function mediaTileHTML(f, i) {
-    const shade = " shade-" + (i % 4);
-    const cap = f.name ? '<span class="media-cap">' + esc(f.name) + "</span>" : "";
-    if (f.type === "model3d") {
-      return '<button type="button" class="media-tile is-3d' + shade + '" data-fi="' + i + '">' +
-        '<span class="media-glyph">' + ICON.cube + "</span>" +
-        '<span class="media-hint">3D · 올리면 돌려볼 수 있어</span>' + cap + "</button>";
+  // "방금 전" / "N분 전" / "N시간 전" for fresh posts, otherwise "11월 11일"
+  function relTime(u) {
+    if (u.createdAt) {
+      const s = Math.max(0, (Date.now() - u.createdAt) / 1000);
+      if (s < 60) return "방금 전";
+      if (s < 3600) return Math.floor(s / 60) + "분 전";
+      if (s < 86400) return Math.floor(s / 3600) + "시간 전";
     }
-    if (f.type === "video") {
-      const vid = isVideoSrc(f.src) ? '<video muted loop playsinline preload="metadata" src="' + esc(f.src) + '"></video>' : "";
-      return '<button type="button" class="media-tile is-video' + shade + '" data-fi="' + i + '">' + vid +
-        '<span class="media-play">' + ICON.play + "</span>" + cap + "</button>";
-    }
-    const img = f.src ? '<img alt="" loading="lazy" src="' + esc(f.src) + '" />' : "";
-    return '<button type="button" class="media-tile' + (f.src ? " has-img" : "") + shade + '" data-fi="' + i + '">' + img + cap + "</button>";
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(u.date || "");
+    if (!m) return u.date || "";
+    const md = Number(m[2]) + "월 " + Number(m[3]) + "일";
+    return m[1] === String(today().getFullYear()) ? md : m[1] + "년 " + md;
   }
 
-  function postHTML(p, u, idx, total) {
+  function fmtClock(sec) {
+    sec = Math.max(0, Math.round(sec || 0));
+    return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
+  }
+
+  // gray placeholders get varied aspects so multi-file rows read like the design
+  const PH_ASPECT = [0.46, 1.5, 1, 0.8];
+
+  function mediaTileHTML(u, f, i, solo) {
+    const key = u.id + ":" + i;
+    if (f.type === "video") {
+      const real = isVideoSrc(f.src);
+      const dur = f.duration || 12;
+      const mv = mockVideo[key];
+      const t = mv ? mv.t : 0;
+      return '<div class="media-tile is-video' + (solo ? " is-solo" : "") + '" data-fi="' + i + '" style="--ar:1.7778">' +
+        (real ? '<video muted loop playsinline preload="metadata" src="' + esc(f.src) + '"></video>' : "") +
+        '<div class="vp-bar">' + asset("vid-bar.png", 600, 54, "vp-bar-bg") +
+        '<div class="vp-row"><div class="vp-l">' +
+        '<button type="button" class="vp-btn" data-act="vplay" aria-label="재생/일시정지">' + asset("vid-play.svg", 24, 24) + "</button>" +
+        '<span class="vp-time"><b>' + fmtClock(t) + "</b><i>/</i><em>" + fmtClock(dur) + "</em></span></div>" +
+        '<button type="button" class="vp-btn vp-expand" data-act="vexpand" aria-label="크게 보기">' + asset("vid-expand.svg", 24, 24) + "</button></div>" +
+        '<div class="vp-track"><div class="vp-prog" style="width:' + (Math.min(1, t / dur) * 100).toFixed(2) + '%"></div></div>' +
+        "</div></div>";
+    }
+    if (f.type === "model3d") {
+      return '<div class="media-tile is-3d' + (solo ? " is-solo" : "") + '" data-fi="' + i + '" style="--ar:1.7778">' +
+        '<span class="media-glyph">' + ICON.cube + "</span>" +
+        '<span class="media-hint">3D · 올리면 돌려볼 수 있어</span></div>';
+    }
+    const ar = f.src ? "" : ' style="--ar:' + (solo ? 1.7778 : PH_ASPECT[i % PH_ASPECT.length]) + '"';
+    const img = f.src ? '<img alt="" loading="lazy" src="' + esc(f.src) + '" />' : "";
+    const cap = !f.src && f.name ? '<span class="media-cap">' + esc(f.name) + "</span>" : "";
+    return '<div class="media-tile is-image' + (f.src ? " has-img" : "") + (solo ? " is-solo" : "") + '" data-fi="' + i + '"' + ar + ">" + img + cap + "</div>";
+  }
+
+  function postMenuHTML(p, u) {
+    const open = visibleUpdate(p, u);
+    if (menuMode === "mood") {
+      return '<div class="post-menu is-mood" role="menu">' +
+        MOODS.map((m) => '<button type="button" class="pm-mood' + (m === u.mood ? " is-on" : "") + '" data-mood="' + m + '">' + m + "</button>").join("") +
+        "</div>";
+    }
+    const item = (act, label, trail) =>
+      '<button type="button" class="pm-item" data-post-act="' + act + '" role="menuitem">' +
+      '<span class="pm-lead">' + asset("menu-1-lead.svg", 20, 20) + "<span>" + label + "</span></span>" +
+      '<span class="pm-trail">' + (trail || asset("menu-1-trail.svg", 20, 20)) + "</span></button>";
+    let html = '<div class="post-menu" role="menu">';
+    if (open) html += item("mood", "기분 바꾸기", '<span class="pm-emoji">' + esc(u.mood || "·") + "</span>");
+    if (open && u.nextTodo) html += item("todo", todoOpen[u.id] ? "할 일 접기" : "다음 할 일");
+    html += item("link", "링크 복사");
+    html += item("private", u.private ? "공개로 전환" : "비공개 전환");
+    html += '<button type="button" class="pm-item is-danger" data-post-act="delete" role="menuitem">' +
+      '<span class="pm-lead">' + asset("menu-delete.svg", 20, 20) + '<span>삭제</span></span><span class="pm-trail"></span></button>';
+    return html + "</div>";
+  }
+
+  function commentsHTML(u) {
+    const list = u.comments || [];
+    return '<div class="post-comments"' + (commentsOpen[u.id] ? "" : " hidden") + ">" +
+      list.map((c) => '<div class="pc-item"><span class="pc-avatar">' + asset("profile.svg", 40, 40) + "</span><p><b>" + esc(c.name) + "</b>" + esc(c.text) + "</p></div>").join("") +
+      '<form class="pc-form" data-up="' + esc(u.id) + '"><input type="text" maxlength="200" placeholder="댓글 남기기..." aria-label="댓글" /><button type="submit">게시</button></form>' +
+      "</div>";
+  }
+
+  function postHTML(p, u) {
     const open = visibleUpdate(p, u);
     const files = open ? u.files || [] : [];
     const todo = u.nextTodo || "";
-    const meta = "@" + esc(channelName(p, u.channelId)) + " · " + esc(fmtSlash(u.date));
+    const meta = esc(relTime(u)) + ' <span class="post-ch">· @' + esc(channelName(p, u.channelId)) + "</span>";
     let media = "";
     if (!open) {
-      media = '<div class="post-media n1"><button type="button" class="media-tile is-nosignal" data-unlock="1">' +
+      media = '<div class="post-media is-single"><button type="button" class="media-tile is-nosignal is-solo" data-unlock="1" style="--ar:1.7778">' +
         '<div class="tv-nosignal"><span>NO SIGNAL</span></div><span class="media-hint">눌러서 잠금 풀기</span></button></div>';
     } else if (files.length) {
-      const n = Math.min(files.length, 4);
-      media = '<div class="post-media n' + n + '">' + files.slice(0, 4).map(mediaTileHTML).join("") +
-        (files.length > 4 ? '<span class="media-more">+' + (files.length - 4) + "</span>" : "") + "</div>";
+      media = '<div class="post-media' + (files.length === 1 ? " is-single" : "") + '">' +
+        files.map((f, i) => mediaTileHTML(u, f, i, files.length === 1)).join("") + "</div>";
     }
-    const priv = u.private ? '<span class="post-lock" title="비공개">비공개</span>' : "";
+    const priv = u.private ? '<span class="post-lock">비공개</span>' : "";
+    const text = open
+      ? '<div class="post-text' + (u._expanded ? " is-expanded" : "") + '" data-act="expand">' +
+        '<p class="post-title">' + esc(u.title || "제목 없음") + "</p>" +
+        (u.description ? "<p>" + esc(u.description) + "</p>" : "") + "</div>"
+      : '<div class="post-text"><p class="post-title">비공개 방송</p></div>';
+    const likes = (u.likes || 0) + (u.liked ? 1 : 0);
+    const menuOn = menuOpenId === u.id;
     return (
-      '<article class="post' + (u.id === newPostId ? " is-new" : "") + (open ? "" : " is-locked") + '" data-up="' + esc(u.id) + '" id="post-' + esc(u.id) + '">' +
-      '<header class="post-head">' +
-      '<span class="post-avatar" aria-hidden="true"></span>' +
-      '<div class="post-who"><b>' + esc(p.name) + "</b>" + priv + '<span class="post-meta">' + meta + "</span></div>" +
-      '<div class="post-tools">' +
-      '<button type="button" class="sq-btn mood" data-act="mood" title="기분">' + esc(open ? (u.mood || "·") : "·") + "</button>" +
-      '<button type="button" class="sq-btn" data-act="menu" title="게시물 메뉴">' + ICON.more + "</button>" +
-      "</div></header>" +
-      '<h3 class="post-title">' + esc(open ? (u.title || "제목 없음") : "비공개 방송") + "</h3>" +
-      (open && u.description ? '<p class="post-desc">' + esc(u.description) + "</p>" : "") +
-      media +
-      (open && todo ? '<div class="post-todo"' + (todoOpen[u.id] ? "" : " hidden") + '><b>다음 할 일</b><span>' + esc(todo) + "</span></div>" : "") +
-      '<footer class="post-foot">' +
-      '<div class="post-foot-l">' +
-      '<button type="button" class="sq-btn' + (todoOpen[u.id] ? " is-on" : "") + '" data-act="todo" title="다음 할 일"' + (open && todo ? "" : " disabled") + ">" + ICON.todo + "</button>" +
-      '<button type="button" class="sq-btn" data-act="link" title="링크 복사">' + ICON.link + "</button>" +
+      '<article class="post' + (u.id === newPostId ? " is-new" : "") + (open ? "" : " is-locked") + (menuOn ? " is-menu" : "") + '" data-up="' + esc(u.id) + '" id="post-' + esc(u.id) + '">' +
+      '<span class="post-avatar" aria-hidden="true">' + asset("profile.svg", 40, 40) + "</span>" +
+      '<div class="post-body">' +
+      '<div class="post-head">' +
+      '<div class="post-who"><div class="post-name"><b>' + esc(p.name) + "</b>" + priv + "</div>" +
+      '<span class="post-meta">' + meta + "</span></div>" +
+      '<div class="post-more-wrap"><button type="button" class="post-more" data-act="menu" aria-label="게시물 메뉴" aria-expanded="' + menuOn + '">' +
+      '<span class="post-more-ico">' + asset("more.svg", 15.2, 3.2) + "</span></button>" +
+      (menuOn ? postMenuHTML(p, u) : "") + "</div>" +
       "</div>" +
-      '<div class="post-foot-r">' +
-      '<button type="button" class="sq-btn" data-act="prev" title="이전(최신) 게시물"' + (idx === 0 ? " disabled" : "") + ">" + ICON.up + "</button>" +
-      '<button type="button" class="sq-btn" data-act="next" title="다음(이전) 게시물"' + (idx === total - 1 ? " disabled" : "") + ">" + ICON.down + "</button>" +
-      "</div></footer></article>"
+      text +
+      media +
+      (open && todo ? '<div class="post-todo"' + (todoOpen[u.id] ? "" : " hidden") + "><b>다음 할 일</b><span>" + esc(todo) + "</span></div>" : "") +
+      '<div class="post-actions">' +
+      '<button type="button" class="pa-btn' + (u.liked ? " is-on" : "") + '" data-act="like" aria-pressed="' + !!u.liked + '" aria-label="좋아요">' + asset("heart.svg", 24, 24) + "<span>" + likes + "</span></button>" +
+      '<button type="button" class="pa-btn' + (commentsOpen[u.id] ? " is-on" : "") + '" data-act="comments" aria-label="댓글">' + asset("comment.svg", 24, 24) + "<span>" + (u.comments || []).length + "</span></button>" +
+      "</div>" +
+      commentsHTML(u) +
+      "</div></article>"
     );
+  }
+
+  function composerHTML() {
+    return '<div class="feed-composer" data-act="onair" role="button" tabindex="0" aria-label="새 방송 쓰기 (ON AIR)">' +
+      '<span class="post-avatar" aria-hidden="true">' + asset("profile.svg", 40, 40) + "</span>" +
+      '<div class="composer-input"><div class="composer-row"><p>새로운 소식을 남겨주세요.</p>' +
+      '<span class="composer-ico">' + asset("note-edit.svg", 20, 20) + "</span></div>" +
+      asset("composer-line.svg", 712, 1, "composer-line") + "</div></div>";
+  }
+
+  function stopMockVideos() {
+    Object.keys(mockVideo).forEach((k) => {
+      if (mockVideo[k].timer) clearInterval(mockVideo[k].timer);
+      mockVideo[k].timer = 0;
+    });
   }
 
   function renderFeed() {
     const p = getProject(currentId);
     if (!p) return closeFeed();
     unmount3D();
-    $("#post-pop").hidden = true;
+    stopMockVideos();
     const posts = channelUpdates(p, currentCh);
+    if (menuOpenId && !posts.some((u) => u.id === menuOpenId)) menuOpenId = null;
     const feed = $("#feed");
     const chip = currentCh
-      ? '<div class="feed-chip"><span>@' + esc(channelName(p, currentCh)) + " · " + posts.length + "개 방송</span>" +
+      ? '<div class="feed-chip"><span>@' + esc(channelName(p, currentCh)) + " 채널만 보는 중 · " + posts.length + "개</span>" +
         '<button type="button" data-act="all-ch">전체 채널 보기</button></div>'
-      : '<div class="feed-chip"><span>' + esc(p.name) + " · 전체 채널 · " + posts.length + "개 방송</span></div>";
+      : "";
+    let body;
     if (!(p.updates || []).length) {
-      feed.innerHTML =
-        '<div class="feed-empty">' +
-        MASCOT_SVG +
+      body = '<div class="feed-empty">' + MASCOT_SVG +
         '<p class="feed-empty-text">첫 방송을 시작해볼까...?</p>' +
         '<button type="button" class="btn-onair" data-act="onair">● ON AIR</button></div>';
     } else if (!posts.length) {
-      feed.innerHTML = chip + '<p class="feed-none">이 채널엔 아직 방송이 없어.</p>';
+      body = chip + '<p class="feed-none">이 채널엔 아직 방송이 없어.</p>';
     } else {
-      feed.innerHTML = chip + posts.map((u, i) => postHTML(p, u, i, posts.length)).join("");
+      body = chip + '<div class="feed-posts">' + posts.map((u) => postHTML(p, u)).join("") + "</div>";
     }
+    feed.innerHTML = composerHTML() + body;
     feed.classList.toggle("is-empty", !(p.updates || []).length);
     $("#btn-complete").textContent = p.completed ? "다시 켜기" : "방송 종료";
     $("#btn-complete").classList.toggle("is-on", !!p.completed);
@@ -1137,7 +1218,7 @@
     closeLightbox();
     $("#feed-view").hidden = true;
     $("#proj-menu").hidden = true;
-    $("#post-pop").hidden = true;
+    closePostMenu();
     currentId = null;
     currentCh = null;
     document.body.classList.add("on-wall");
@@ -1249,14 +1330,74 @@
     sc.scrollTo({ top: Math.max(0, top), behavior: reducedMotion() ? "auto" : "smooth" });
   }
 
-  function openPostPop(btn, html) {
-    const pop = $("#post-pop");
-    pop.innerHTML = html;
-    pop.hidden = false;
-    const host = $("#feed-view").getBoundingClientRect();
-    const r = btn.getBoundingClientRect();
-    pop.style.top = (r.bottom - host.top + 6) + "px";
-    pop.style.left = Math.max(8, r.right - host.left - pop.offsetWidth) + "px";
+  function closePostMenu() {
+    if (!menuOpenId) return;
+    const el = document.getElementById("post-" + menuOpenId);
+    menuOpenId = null;
+    menuMode = "main";
+    if (el) {
+      el.classList.remove("is-menu");
+      const m = $(".post-menu", el);
+      if (m) m.remove();
+      const b = $(".post-more", el);
+      if (b) b.setAttribute("aria-expanded", "false");
+    }
+  }
+
+  function openPostMenu(post, p, u, mode) {
+    const wasSame = menuOpenId === u.id && !mode;
+    closePostMenu();
+    if (wasSame) return;
+    menuOpenId = u.id;
+    menuMode = mode || "main";
+    post.classList.add("is-menu");
+    $(".post-more-wrap", post).insertAdjacentHTML("beforeend", postMenuHTML(p, u));
+    $(".post-more", post).setAttribute("aria-expanded", "true");
+  }
+
+  function toggleMockVideo(tile, u, i) {
+    const f = (u.files || [])[i];
+    if (!f) return;
+    const v = $("video", tile);
+    if (v) {
+      if (v.paused) { v.play().catch(() => {}); tile.classList.add("is-playing"); }
+      else { v.pause(); tile.classList.remove("is-playing"); }
+      return;
+    }
+    const key = u.id + ":" + i;
+    const dur = f.duration || 12;
+    const mv = mockVideo[key] || (mockVideo[key] = { t: 0, timer: 0 });
+    if (mv.timer) {
+      clearInterval(mv.timer);
+      mv.timer = 0;
+      tile.classList.remove("is-playing");
+      return;
+    }
+    if (mv.t >= dur) mv.t = 0;
+    tile.classList.add("is-playing");
+    mv.timer = setInterval(() => {
+      const prog = $(".vp-prog", tile);
+      const time = $(".vp-time b", tile);
+      if (!prog || !tile.isConnected) { clearInterval(mv.timer); mv.timer = 0; return; }
+      mv.t = Math.min(dur, mv.t + 0.25);
+      prog.style.width = (mv.t / dur * 100).toFixed(2) + "%";
+      time.textContent = fmtClock(mv.t);
+      if (mv.t >= dur) { clearInterval(mv.timer); mv.timer = 0; tile.classList.remove("is-playing"); }
+    }, 250);
+  }
+
+  // j / k: next / previous post (replaces the old ↑/↓ footer buttons)
+  function stepPost(dir) {
+    const posts = $$("#feed .post[data-up]");
+    if (!posts.length) return;
+    const sc = $("#feed-scroll");
+    const tops = posts.map((el) => el.offsetTop - 44);
+    let cur = 0;
+    tops.forEach((t, i) => { if (t <= sc.scrollTop + 10) cur = i; });
+    let next = cur + dir;
+    if (dir < 0 && sc.scrollTop > tops[cur] + 10) next = cur;
+    next = Math.max(0, Math.min(posts.length - 1, next));
+    scrollToPost(posts[next].getAttribute("data-up"));
   }
 
   function bindFeed() {
@@ -1264,41 +1405,74 @@
     feed.addEventListener("click", (e) => {
       const p = getProject(currentId);
       if (!p) return;
-      const actBtn = e.target.closest("[data-act]");
       const post = e.target.closest(".post[data-up]");
       const u = post && (p.updates || []).find((x) => x.id === post.getAttribute("data-up"));
-      if (actBtn) {
+
+      const pm = e.target.closest(".post-menu [data-post-act], .post-menu [data-mood]");
+      if (pm && u) {
         e.stopPropagation();
-        const act = actBtn.getAttribute("data-act");
-        if (act === "onair") return ensureEdit(openOnAir);
-        if (act === "all-ch") { currentCh = null; return renderFeed(); }
-        if (!u) return;
+        if (pm.hasAttribute("data-mood")) {
+          const mood = pm.getAttribute("data-mood");
+          closePostMenu();
+          return ensureEdit(() => { u.mood = mood; saveState(); renderFeed(); toast("기분 바꿨어 " + mood); });
+        }
+        const act = pm.getAttribute("data-post-act");
+        if (act === "mood") return openPostMenu(post, p, u, "mood");
+        closePostMenu();
         if (act === "todo") {
           todoOpen[u.id] = !todoOpen[u.id];
           const memo = $(".post-todo", post);
           if (memo) memo.hidden = !todoOpen[u.id];
-          actBtn.classList.toggle("is-on", !!todoOpen[u.id]);
           return;
         }
         if (act === "link") {
           return copyText(location.href.split("#")[0] + "#p=" + encodeURIComponent(p.id) + "&u=" + encodeURIComponent(u.id));
         }
-        if (act === "prev" || act === "next") {
-          const sib = act === "prev" ? post.previousElementSibling : post.nextElementSibling;
-          if (sib && sib.matches(".post")) scrollToPost(sib.getAttribute("data-up"));
+        return ensureEdit(() => {
+          if (act === "private") {
+            u.private = !u.private;
+          } else if (act === "delete") {
+            if (!window.confirm("이 방송을 지울까...? (되돌릴 수 없어)")) return;
+            p.updates = p.updates.filter((x) => x.id !== u.id);
+            applySizes();
+          }
+          saveState();
+          renderFeed();
+          renderWall();
+        });
+      }
+      if (e.target.closest(".post-menu")) return;
+
+      const actBtn = e.target.closest("[data-act]");
+      if (actBtn) {
+        const act = actBtn.getAttribute("data-act");
+        if (act === "onair") { e.stopPropagation(); return ensureEdit(openOnAir); }
+        if (act === "all-ch") { currentCh = null; return renderFeed(); }
+        if (u && act === "menu") { e.stopPropagation(); return openPostMenu(post, p, u); }
+        if (u && act === "expand") {
+          u._expanded = !u._expanded;
+          actBtn.classList.toggle("is-expanded", !!u._expanded);
           return;
         }
-        if (act === "mood") {
-          if (!visibleUpdate(p, u)) return;
-          return openPostPop(actBtn, '<div class="mood-pick" data-up="' + esc(u.id) + '">' +
-            MOODS.map((m) => '<button type="button" data-mood="' + m + '"' + (m === u.mood ? ' class="is-on"' : "") + ">" + m + "</button>").join("") + "</div>");
+        if (u && act === "like") {
+          u.liked = !u.liked;
+          saveState();
+          actBtn.classList.toggle("is-on", u.liked);
+          actBtn.setAttribute("aria-pressed", String(u.liked));
+          $("span", actBtn).textContent = (u.likes || 0) + (u.liked ? 1 : 0);
+          return;
         }
-        if (act === "menu") {
-          return openPostPop(actBtn,
-            '<button type="button" data-post-act="private" data-up="' + esc(u.id) + '">' + (u.private ? "공개로 전환" : "비공개 전환") + "</button>" +
-            '<button type="button" data-post-act="delete" data-up="' + esc(u.id) + '" class="danger">이 방송 삭제</button>');
+        if (u && act === "comments") {
+          commentsOpen[u.id] = !commentsOpen[u.id];
+          const box = $(".post-comments", post);
+          box.hidden = !commentsOpen[u.id];
+          actBtn.classList.toggle("is-on", !!commentsOpen[u.id]);
+          if (commentsOpen[u.id]) $("input", box).focus({ preventScroll: true });
+          return;
         }
-        return;
+        const vtile = actBtn.closest(".media-tile[data-fi]");
+        if (u && vtile && act === "vplay") return toggleMockVideo(vtile, u, Number(vtile.getAttribute("data-fi")));
+        if (u && vtile && act === "vexpand") return openLightbox(u.id, Number(vtile.getAttribute("data-fi")));
       }
       if (e.target.closest("[data-unlock]")) {
         return ensureEdit(() => renderFeed());
@@ -1306,7 +1480,30 @@
       const tile = e.target.closest(".media-tile[data-fi]");
       if (tile && u) openLightbox(u.id, Number(tile.getAttribute("data-fi")));
     });
-    // hover: video previews play, 3D tiles become live viewers
+    feed.addEventListener("keydown", (e) => {
+      if ((e.key === "Enter" || e.key === " ") && e.target.classList && e.target.classList.contains("feed-composer")) {
+        e.preventDefault();
+        ensureEdit(openOnAir);
+      }
+    });
+    feed.addEventListener("submit", (e) => {
+      const form = e.target.closest(".pc-form");
+      if (!form) return;
+      e.preventDefault();
+      const p = getProject(currentId);
+      const u = p && (p.updates || []).find((x) => x.id === form.getAttribute("data-up"));
+      const input = $("input", form);
+      const text = input.value.trim();
+      if (!u || !text) return;
+      u.comments = u.comments || [];
+      u.comments.push({ name: "나", text: text });
+      saveState();
+      commentsOpen[u.id] = true;
+      renderFeed();
+      const again = document.querySelector("#post-" + CSS.escape(u.id) + " .pc-form input");
+      if (again) again.focus({ preventScroll: true });
+    });
+    // hover: real video previews play, 3D tiles become live viewers
     feed.addEventListener("pointerover", (e) => {
       const tile = e.target.closest(".media-tile");
       if (!tile || tile.contains(e.relatedTarget)) return;
@@ -1320,51 +1517,24 @@
       const v = $("video", tile);
       if (v) { v.pause(); tile.classList.remove("is-playing"); }
     });
-
-    $("#post-pop").addEventListener("click", (e) => {
-      e.stopPropagation();
-      const p = getProject(currentId);
-      if (!p) return;
-      const moodBtn = e.target.closest("[data-mood]");
-      if (moodBtn) {
-        const id = moodBtn.closest("[data-up]").getAttribute("data-up");
-        return ensureEdit(() => {
-          const u = (p.updates || []).find((x) => x.id === id);
-          if (!u) return;
-          u.mood = moodBtn.getAttribute("data-mood");
-          saveState();
-          renderFeed();
-        });
-      }
-      const b = e.target.closest("[data-post-act]");
-      if (!b) return;
-      const id = b.getAttribute("data-up");
-      const act = b.getAttribute("data-post-act");
-      $("#post-pop").hidden = true;
-      ensureEdit(() => {
-        const u = (p.updates || []).find((x) => x.id === id);
-        if (!u) return;
-        if (act === "private") {
-          u.private = !u.private;
-        } else if (act === "delete") {
-          if (!window.confirm("이 방송을 지울까...? (되돌릴 수 없어)")) return;
-          p.updates = p.updates.filter((x) => x.id !== id);
-          applySizes();
-        }
-        saveState();
-        renderFeed();
-        renderWall();
-      });
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".post-more-wrap")) closePostMenu();
     });
-    $("#feed-scroll").addEventListener("scroll", () => { $("#post-pop").hidden = true; }, { passive: true });
 
     $("#lb-prev").addEventListener("click", () => { if (lb) { lb.fi--; renderLightbox(); } });
     $("#lb-next").addEventListener("click", () => { if (lb) { lb.fi++; renderLightbox(); } });
     $$('#lightbox [data-close="lightbox"]').forEach((b) => b.addEventListener("click", closeLightbox));
     document.addEventListener("keydown", (e) => {
-      if (!lb) return;
-      if (e.key === "ArrowLeft") { lb.fi--; renderLightbox(); }
-      if (e.key === "ArrowRight") { lb.fi++; renderLightbox(); }
+      if (lb) {
+        if (e.key === "ArrowLeft") { lb.fi--; renderLightbox(); }
+        if (e.key === "ArrowRight") { lb.fi++; renderLightbox(); }
+        return;
+      }
+      if ($("#feed-view").hidden || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.target.closest && e.target.closest("input, textarea, select, [contenteditable]")) return;
+      if (!$("#onair-view").hidden || !$("#pass-view").hidden) return;
+      if (e.key === "j") stepPost(1);
+      if (e.key === "k") stepPost(-1);
     });
   }
 
@@ -1751,6 +1921,9 @@
       mood: oaMood,
       private: $("#oa-private").checked,
       files: oaFiles.slice(),
+      createdAt: Date.now(),
+      likes: 0,
+      comments: [],
     };
     p.updates = p.updates || [];
     p.updates.push(update);
@@ -2010,7 +2183,6 @@
       if (!e.target.closest(".search-box")) $("#search-results").hidden = true;
       if (!e.target.closest("#btn-menu") && !e.target.closest("#menu-pop")) $("#menu-pop").hidden = true;
       if (!e.target.closest("#btn-more-proj") && !e.target.closest("#proj-menu")) $("#proj-menu").hidden = true;
-      if (!e.target.closest("#post-pop")) $("#post-pop").hidden = true;
       if (!e.target.closest(".ws-title")) {
         const menu = $("#ws-cat-menu");
         if (menu) menu.hidden = true;
@@ -2205,7 +2377,7 @@
       if (!$("#pass-view").hidden) return closePass();
       if (!$("#onair-view").hidden) return closeOnAir();
       if (!$("#lightbox").hidden) return closeLightbox();
-      if (!$("#post-pop").hidden) return ($("#post-pop").hidden = true);
+      if (menuOpenId) return closePostMenu();
       if (!$("#proj-menu").hidden) return ($("#proj-menu").hidden = true);
       if (!$("#trash-view").hidden) { $("#trash-view").hidden = true; syncRail(); return; }
       if (!$("#cat-view").hidden) return ($("#cat-view").hidden = true);
